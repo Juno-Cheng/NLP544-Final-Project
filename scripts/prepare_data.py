@@ -1,7 +1,9 @@
 """Download CGA-WIKI and export agent-facing seeds and evaluation-only labels.
 
 Usage:
-    python scripts/prepare_data.py [--opening-turns 3]
+    python scripts/prepare_data.py [--opening-turns N]
+
+Settings come from configs/data.yaml; --opening-turns overrides opening_turns for one run.
 
 Outputs (both gitignored):
     data/processed/seeds.jsonl   ConversationSeed records; no labels, no later turns
@@ -26,6 +28,8 @@ import argparse
 import json
 from collections import Counter
 from pathlib import Path
+
+import yaml
 from convokit import Corpus, download
 
 CORPUS_NAME = "conversations-gone-awry-corpus"
@@ -38,8 +42,16 @@ LABEL_DEFINITION = (
 ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw"
 PROCESSED_DIR = ROOT / "data" / "processed"
+CONFIG_PATH = ROOT / "configs" / "data.yaml"
 
 #================ Helper Functions==================
+# Read the shared data settings from configs/data.yaml.
+def load_config(path=CONFIG_PATH):
+    with path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+
 # Pick the first few real comments of a conversation to use as the seed opening.
 def opening_turns(convo, max_turns):
     """First non-header comments in chronological order, stopping before any attack."""
@@ -62,10 +74,13 @@ def write_jsonl(path, records):
 #================ Main Function==================
 # Download the corpus, build seeds and labels for every conversation, and save both.
 def main():
-    # 1. Set up the parser: --opening-turns controls how many comments go in each seed
+    # 1. Read settings from data.yaml; --opening-turns overrides it for this run only
+    config = load_config()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--opening-turns", type=int, default=3)  # max real comments agents see before continuing; enough context without revealing the escalation
+    parser.add_argument("--opening-turns", type=int, default=None)  # max real comments agents see before continuing; enough context without revealing the escalation
     args = parser.parse_args()
+    max_turns = args.opening_turns if args.opening_turns is not None else config["opening_turns"]
+    print(f"Using opening_turns={max_turns}")
 
     # 2. Make sure the output folders exist
     RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,7 +93,7 @@ def main():
     # 4. Build one seed and one label per conversation
     seeds, labels, skipped = [], [], 0
     for convo in corpus.iter_conversations():
-        turns = opening_turns(convo, args.opening_turns)
+        turns = opening_turns(convo, max_turns)
         if not turns:
             skipped += 1
             continue

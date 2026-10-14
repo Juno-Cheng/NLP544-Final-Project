@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from prepare_data import PROCESSED_DIR, opening_turns, write_jsonl
+from prepare_data import PROCESSED_DIR, load_config, opening_turns, write_jsonl
 
 SEEDS_PATH = PROCESSED_DIR / "seeds.jsonl"
 LABELS_PATH = PROCESSED_DIR / "labels.jsonl"
@@ -30,6 +30,11 @@ def make_convo(*utts):
 def read_jsonl(path):
     with path.open(encoding="utf-8") as f:
         return [json.loads(line) for line in f]
+
+
+def test_config_has_positive_opening_turns():
+    opening = load_config()["opening_turns"]
+    assert isinstance(opening, int) and opening > 0
 
 
 def test_opening_skips_section_headers():

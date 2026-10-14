@@ -1,11 +1,12 @@
-# Data settings read by src/data_loader.py.
+# Data settings read by scripts/prepare_data.py and src/data_loader.py.
 # Placeholder defaults: adjust later once the team agrees (record changes in DECISIONS.md).
 
 source: cga-wiki
 seeds_path: data/processed/seeds.jsonl
 labels_path: data/processed/labels.jsonl
 
-# Opening length is set when seeds are built: python scripts/prepare_data.py --opening-turns N
+# Max real comments per seed opening, used by prepare_data.py.
+# Re-run prepare_data.py after changing; --opening-turns N overrides this for one run.
 opening_turns: 3
 
 # Keep only openings with this many distinct speakers (simulation assumes 2 agents)

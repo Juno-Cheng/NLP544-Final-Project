@@ -112,9 +112,9 @@ cp .env.example .env   # then add your API key(s); never commit .env
 Requires Python 3.13. Data is gitignored, so everyone builds their own copy (first run downloads ~45 MB and takes a few minutes):
 
 ```bash
-python scripts/prepare_data.py                    # build seeds + labels (default: 3 opening turns)
-python scripts/prepare_data.py --opening-turns 5  # optional: longer openings (overwrites the files)
-pytest tests/test_prepare_data.py                 # should print "11 passed"
+python scripts/prepare_data.py                    # build seeds + labels using configs/data.yaml
+python scripts/prepare_data.py --opening-turns 5  # optional: override opening_turns for one run (overwrites the files)
+pytest tests/test_prepare_data.py                 # should print "12 passed"
 ```
 
 The run should end with 4,188 seeds and balanced label counts per split.
