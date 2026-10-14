@@ -59,5 +59,53 @@ def write_jsonl(path, records):
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+#================ Main Function==================
+# Download the corpus, build seeds and labels for every conversation, and save both.
+def main():
+    # 1. Set up the parser: --opening-turns controls how many comments go in each seed
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--opening-turns", type=int, default=3)  # max real comments agents see before continuing; enough context without revealing the escalation
+    args = parser.parse_args()
+
+    # 2. Make sure the output folders exist
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 3. Download the corpus (skipped if already in data/raw) and load it
+    corpus = Corpus(filename=download(CORPUS_NAME, data_dir=str(RAW_DIR)))
+    corpus.print_summary_stats()
+
+    # 4. Build one seed and one label per conversation
+    seeds, labels, skipped = [], [], 0
+    for convo in corpus.iter_conversations():
+        turns = opening_turns(convo, args.opening_turns)
+        if not turns:
+            skipped += 1
+            continue
+        # Seed: only what the agents may see
+        seeds.append({"conversation_id": convo.id, "source": SOURCE, "opening_turns": turns})
+        # Label: the real outcome, read only by evaluate.py
+        labels.append({
+            "conversation_id": convo.id,
+            "real_outcome": int(bool(convo.meta["conversation_has_personal_attack"])),
+            "label_definition": LABEL_DEFINITION,
+            "split": convo.meta.get("split"),
+            "pair_id": convo.meta.get("pair_id"),
+            "verified": convo.meta.get("verified"),
+            "annotation_year": convo.meta.get("annotation_year"),
+            "page_id": convo.meta.get("page_id"),
+        })
+
+    # 5. Save seeds and labels to separate files
+    write_jsonl(PROCESSED_DIR / "seeds.jsonl", seeds)
+    write_jsonl(PROCESSED_DIR / "labels.jsonl", labels)
+
+    # 6. Print a summary: totals and label balance per split
+    counts = Counter((row["split"], row["real_outcome"]) for row in labels)
+    print(f"\nWrote {len(seeds)} seeds, skipped {skipped} with no pre-attack opening")
+    for (split, outcome), n in sorted(counts.items(), key=str):
+        print(f"  split={split} real_outcome={outcome}: {n}")
+
+
 if __name__ == "__main__":
     main()
