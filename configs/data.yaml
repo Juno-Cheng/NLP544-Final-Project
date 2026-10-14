@@ -1,0 +1,29 @@
+# Data settings read by scripts/prepare_data.py and src/data_loader.py.
+# Placeholder defaults: adjust later once the team agrees (record changes in DECISIONS.md).
+
+source: cga-wiki
+seeds_path: data/processed/seeds.jsonl
+labels_path: data/processed/labels.jsonl
+
+# Max real comments per seed opening, used by prepare_data.py.
+# Re-run prepare_data.py after changing; --opening-turns N overrides this for one run.
+opening_turns: 3
+
+# Keep only openings with this many distinct speakers (simulation assumes 2 agents)
+min_speakers: 2
+max_speakers: 2
+
+# Which source splits to draw from (train / val / test)
+splits: [test]
+
+# Only use conversations whose attack label was double-checked by an internal annotator
+verified_only: false
+
+# Number of conversations to load; null = all that pass the filters
+sample_size: 20
+
+# Keep matched attack/civil pairs together and sample equal numbers of each label
+keep_pairs: true
+
+# Fixed seed so the same sample is drawn every run
+random_seed: 544

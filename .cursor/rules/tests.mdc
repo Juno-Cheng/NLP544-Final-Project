@@ -1,0 +1,26 @@
+---
+description: Testing conventions for pytest tests and fixtures
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+# Testing
+
+- Use `pytest` with plain `assert`; one `tests/test_<module>.py` per `src/` module.
+- Tests must run offline and free: use the mock LLM client from `src/llm_client.py`, never a live API.
+- Load shared inputs from `tests/fixtures/*.json`; keep fixtures small and in the `schemas.py` format.
+- Changing a fixture changes the shared contract, so the integration owner must approve it.
+- Name tests by behavior: `test_static_trust_never_changes`, not `test_update_1`.
+- Cover the safeguards, not just the happy path:
+  - seeds contain no labels or turns after the cut-off
+  - judge payload contains no condition, trust, model id, or label
+  - static and dynamic runs from the same seed share all settings except the updater
+  - failed runs are kept with a status, not dropped
+
+```python
+# ✅ GOOD
+def test_judge_payload_has_no_condition_or_trust(sample_result_dynamic):
+    payload = build_judge_payload(sample_result_dynamic)
+    assert "dynamic" not in payload
+    assert "trust" not in payload
+```
