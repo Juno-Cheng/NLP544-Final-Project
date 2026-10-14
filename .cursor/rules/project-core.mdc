@@ -1,0 +1,31 @@
+---
+description: Project context and non-negotiable experiment safeguards for the static vs. dynamic personas project
+alwaysApply: true
+---
+
+# Project Core Rules
+
+CSCI 544 project: paired static/dynamic LLM persona simulations on CGA-WIKI openings, scored by a blind judge and compared to real personal-attack labels. `SPEC.md` is the source of truth; `DECISIONS.md` records what the team has agreed.
+
+## Information flow (never violate)
+
+- Only `src/evaluate.py` may read real labels (`data/processed/labels.jsonl`, `real_outcome`).
+- Generator and state updater see only `ConversationSeed` turns and generated turns — never labels or future human turns.
+- Judge input is ordered dialogue text plus the rubric only. No condition name, trust values, model provenance, or labels.
+- Static and dynamic runs share seed, personas, model, turn budget, and generation settings. Only the update policy differs.
+
+## Where things live
+
+- Shared types come from `src/schemas.py`. Do not redefine `DialogueTurn`, `AgentState`, etc. in other modules.
+- One module per owner in `src/`; don't edit another owner's module without saying so.
+- Tunable parameters go in `configs/*.yaml`, prompt text in `prompts/*_vN.txt`. No hardcoded prompts or magic numbers in code.
+- Entry points live in `scripts/`; `src/` modules don't run anything on import.
+- Notebooks are for exploration only; anything the pipeline depends on belongs in `src/` or `scripts/`.
+
+## Safety and reproducibility
+
+- Never commit or log API keys; read them from `.env` via environment variables.
+- Never commit `data/raw/`, `data/processed/`, or `outputs/`.
+- Log failed runs with a status and error; never silently drop them.
+- Record model id, prompt version, updater version, and random seed in `run_metadata`.
+- Pin new dependencies in `requirements.txt` as `name==version`. Target Python 3.13.
