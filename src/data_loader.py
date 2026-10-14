@@ -33,7 +33,7 @@ def read_jsonl(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-# Count distinct speakers in a seed's opening turns.
+# Count distinct speakers in a seed's opening turns. We only use 2 speaker conversations as we are doing agent to agent.
 def count_speakers(seed: dict) -> int:
     return len({turn["speaker_id"] for turn in seed["opening_turns"]}) # count the number of distinct speakers in the seed
 
@@ -83,7 +83,7 @@ def complete_pairs(examples: list[dict]) -> list[dict]:
 
 #================ Sampling ==================
 # Pick n examples reproducibly, as whole attack/civil pairs or individually.
-def sample_examples(examples: list[dict], n: int | None, keep_pairs: bool, random_seed: int) -> list[dict]:
+def sample_examples(examples: list[dict], n: int | None, keep_pairs: bool, random_seed: int) -> list[dict]: 
     """n=None returns everything; n larger than the pool returns the whole pool."""
     rng = random.Random(random_seed)
     by_id = {ex["seed"]["conversation_id"]: ex for ex in examples}
@@ -91,7 +91,7 @@ def sample_examples(examples: list[dict], n: int | None, keep_pairs: bool, rando
     if not keep_pairs:
         ids = sorted(by_id)
         if n is not None:
-            ids = sorted(rng.sample(ids, min(n, len(ids))))
+            ids = sorted(rng.sample(ids, min(n, len(ids)))) # sample n ids from the ids list
         return [by_id[cid] for cid in ids]
 
     # Sample whole pairs (n // 2 of them) so attack and civil counts stay equal.
@@ -120,7 +120,7 @@ def load_and_prepare(source: str = "cga-wiki", config: dict | None = None) -> li
 
     # 2. Apply the split / verified / speaker filters
     examples = filter_by_split(examples, config["splits"])
-    if config["verified_only"]:
+    if config["verified_only"]: # only keep examples that were verified by an internal annotator, this means that the label was checked by a human and more reliable.
         examples = filter_verified(examples)
     examples = filter_by_speakers(examples, config["min_speakers"], config["max_speakers"])
 
