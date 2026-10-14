@@ -56,6 +56,10 @@ def load_config(path=CONFIG_PATH):
 def opening_turns(convo, max_turns):
     """First non-header comments in chronological order, stopping before any attack."""
     turns = []
+    # Each utt is one comment, oldest first. Example:
+    #   utt.speaker.id -> "Sirex98"
+    #   utt.text       -> "I notice you reverted the move to Bill Chen..."
+    #   utt.meta       -> {"is_section_header": False, "comment_has_personal_attack": False, ...}
     for utt in convo.get_chronological_utterance_list():
         if utt.meta.get("is_section_header"):
             continue
