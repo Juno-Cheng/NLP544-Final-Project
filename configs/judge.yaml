@@ -1,0 +1,4 @@
+# Mock-stage settings. Runtime model adapter is injected in Python until shared client is finalized.
+judge_model_id: mock-judge
+rubric_version: v1
+rubric_path: prompts/judge_rubric_v1.txt
