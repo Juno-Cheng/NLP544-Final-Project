@@ -109,14 +109,24 @@ pip install -r requirements.txt
 cp .env.example .env   # then add your API key(s); never commit .env
 ```
 
+Requires Python 3.13. Data is gitignored, so everyone builds their own copy (first run downloads ~45 MB and takes a few minutes):
+
+```bash
+python scripts/prepare_data.py                    # build seeds + labels using configs/data.yaml
+python scripts/prepare_data.py --opening-turns 5  # optional: override opening_turns for one run (overwrites the files)
+pytest tests/test_prepare_data.py                 # should print "12 passed"
+pytest tests/test_data_loader.py                  # should print "18 passed"
+```
+
+The run should end with 4,188 seeds and balanced label counts per split.
+
 ## Usage
 
 To be filled in once the integration command exists:
 
 ```bash
-python scripts/prepare_data.py     # download CGA-WIKI, export seeds + labels
 python scripts/run_experiment.py   # paired static/dynamic run, judge, evaluate
-pytest                             # run tests
+pytest                             # run all tests
 ```
 
 ## Workflow

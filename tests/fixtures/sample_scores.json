@@ -1,0 +1,14 @@
+[
+  {
+    "run_id": "example_001-static",
+    "score": 0.35,
+    "judge_model_id": "mock-judge",
+    "rubric_version": "judge_rubric_v1"
+  },
+  {
+    "run_id": "example_001-dynamic",
+    "score": 0.82,
+    "judge_model_id": "mock-judge",
+    "rubric_version": "judge_rubric_v1"
+  }
+]

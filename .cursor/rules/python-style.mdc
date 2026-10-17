@@ -1,0 +1,40 @@
+---
+description: Python code structure, naming, and comment style
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python Style
+
+## Structure
+
+- Order: module docstring, imports (stdlib, third-party, local), constants, functions, `main()`.
+- Small functions that do one thing; implement the interfaces in `SPEC.md` §5 with the exact names and signatures.
+- Type hints on every public function signature.
+- Use `pathlib.Path` built from the repo root, not hardcoded or relative string paths.
+- Read/write data as UTF-8 JSONL with `ensure_ascii=False`.
+- Scripts use `argparse` and an `if __name__ == "__main__": main()` guard.
+- Raise clear exceptions; never use bare `except:` or swallow errors silently.
+
+## Naming
+
+- `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants.
+- Use the spec's vocabulary: `conversation_id`, `run_id`, `speaker_id`, `condition`, `trust`.
+
+## Comments and docstrings
+
+- Module docstring: one line on purpose, plus usage and inputs/outputs for scripts.
+- Function docstring: one line saying what it returns or does. Add `Args`/`Returns` only when not obvious from names and types.
+- Inline comments only for constraints the code can't show (e.g., "labels must never reach the judge").
+- Don't narrate the code, leave commented-out code, or add banner/divider comments.
+
+```python
+# ❌ BAD
+# loop over the turns
+for turn in turns:  # iterate
+    ...
+
+# ✅ GOOD
+def opening_turns(convo, max_turns: int) -> list[dict]:
+    """First non-header comments in chronological order, stopping before any attack."""
+```

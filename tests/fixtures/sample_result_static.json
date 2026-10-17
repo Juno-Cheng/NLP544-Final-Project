@@ -1,0 +1,46 @@
+{
+  "run_id": "example_001-static",
+  "conversation_id": "example_001",
+  "condition": "static",
+  "transcript": [
+    {"turn_id": 0, "speaker_id": "A", "text": "Why did you remove my edit?"},
+    {"turn_id": 1, "speaker_id": "B", "text": "It was not relevant."},
+    {"turn_id": 2, "speaker_id": "A", "text": "Could you point me to the guideline you used?"},
+    {"turn_id": 3, "speaker_id": "B", "text": "The sentence was off topic for the article."}
+  ],
+  "generated_turns": [
+    {"turn_id": 2, "speaker_id": "A", "text": "Could you point me to the guideline you used?"},
+    {"turn_id": 3, "speaker_id": "B", "text": "The sentence was off topic for the article."}
+  ],
+  "state_history": [
+    {
+      "turn_id": 2,
+      "speaker_states": {
+        "A": {"speaker_id": "A", "trust": 0.7, "stable_traits": {"role": "editor"}},
+        "B": {"speaker_id": "B", "trust": 0.7, "stable_traits": {"role": "editor"}}
+      }
+    },
+    {
+      "turn_id": 3,
+      "speaker_states": {
+        "A": {"speaker_id": "A", "trust": 0.7, "stable_traits": {"role": "editor"}},
+        "B": {"speaker_id": "B", "trust": 0.7, "stable_traits": {"role": "editor"}}
+      }
+    }
+  ],
+  "status": "ok",
+  "run_metadata": {
+    "experiment_id": "exp-fixture",
+    "paired_run_id": "pair-example_001",
+    "model_id": "mock",
+    "prompt_version": "reply_v1",
+    "updater_version": "trust_v1",
+    "max_generated_turns": 2,
+    "temperature": 0.0,
+    "random_seed": 544,
+    "error": null,
+    "token_usage": null,
+    "latency_ms": null,
+    "cost": null
+  }
+}
