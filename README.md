@@ -2,7 +2,7 @@
 
 CSCI 544 Final Project. We simulate two-agent continuations of real Wikipedia talk-page openings (Cornell CGA-WIKI) and test whether letting each agent's **trust** update during the conversation (dynamic) predicts real personal attacks better than keeping trust fixed (static).
 
-See [`SPEC.md`](SPEC.md) for the full design and [`DECISIONS.md`](DECISIONS.md) for team decisions and open questions.
+See [`SPEC.md`](agents_docs/SPEC.md) for the full design, [`DECISIONS.md`](agents_docs/DECISIONS.md) for team decisions and open questions, and [Arya’s implementation checklist](agents_docs/Arya.md) for the October 16–17 requirements.
 
 ## Pipeline
 
@@ -16,8 +16,10 @@ data_loader -> persona -> simulator (response_generator + state_updater)
 ```text
 NLP544-Final-Project/
 ├── README.md                    # setup + the one integration command
-├── SPEC.md                      # the frozen spec (v0.2 → v1.0 once approved)
-├── DECISIONS.md                 # running log of team decisions + open questions
+├── agents_docs/                 # project requirements and planning
+│   ├── SPEC.md                  # technical specification; provisional choices noted
+│   ├── DECISIONS.md             # team decisions, open questions, implementation guide
+│   └── Arya.md                  # Arya’s October 16–17 requirements and guardrails
 ├── requirements.txt
 ├── .env.example                 # API key variable names only; real .env is gitignored
 ├── .gitignore                   # ignores .env, data/raw, data/processed, outputs/
