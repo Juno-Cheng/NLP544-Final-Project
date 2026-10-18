@@ -9,6 +9,7 @@ Fake dataset (pair = one attack + one civil conversation):
     p5     train split                            -> dropped by split filter
     p6     test, attack side has 3 speakers       -> attack dropped, so civil side loses its pair
     p7     test, attack side not verified         -> dropped when verified_only is on
+    p8     test, attack side has a 2-turn opening -> attack dropped, so civil side loses its pair
 """
 
 import json
@@ -18,6 +19,7 @@ import pytest
 from src.data_loader import (
     complete_pairs,
     count_speakers,
+    filter_by_opening_length,
     filter_by_speakers,
     filter_by_split,
     filter_verified,
@@ -69,6 +71,7 @@ def fake_files(tmp_path):
         make_pair(5, split="train"),
         make_pair(6, attack_speakers=("A", "B", "E")),
         make_pair(7, verified=False),
+        make_pair(8, attack_speakers=("A", "B")),
     ]:
         seeds += s
         labels += l
@@ -87,6 +90,7 @@ def config(fake_files):
         "labels_path": str(labels_path),
         "min_speakers": 2,
         "max_speakers": 2,
+        "min_opening_turns": 3,
         "splits": ["test"],
         "verified_only": True,
         "sample_size": None,
@@ -99,6 +103,7 @@ def config(fake_files):
 def examples(config):
     return load_and_prepare("cga-wiki", {**config, "splits": ["test", "train"],
                                          "min_speakers": 1, "max_speakers": 10,
+                                         "min_opening_turns": 0,
                                          "verified_only": False, "keep_pairs": False})
 
 
@@ -108,7 +113,7 @@ def ids(examples):
 
 def test_read_jsonl_reads_every_line(fake_files):
     seeds_path, _ = fake_files
-    assert len(read_jsonl(seeds_path)) == 14
+    assert len(read_jsonl(seeds_path)) == 16
 
 
 def test_load_config_reads_real_yaml():
@@ -122,7 +127,7 @@ def test_count_speakers():
 
 
 def test_examples_have_expected_fields(examples):
-    assert len(examples) == 14
+    assert len(examples) == 16
     for e in examples:
         assert set(e) == EXAMPLE_KEYS
         assert set(e["seed"]) == SEED_KEYS
@@ -132,6 +137,16 @@ def test_filter_by_speakers_drops_three_speaker_opening(examples):
     kept = filter_by_speakers(examples, min_speakers=2, max_speakers=2)
     assert "a6" not in ids(kept)
     assert "c6" in ids(kept)
+
+
+def test_filter_by_opening_length_drops_short_opening(examples):
+    kept = filter_by_opening_length(examples, min_turns=3)
+    assert "a8" not in ids(kept)
+    assert "c8" in ids(kept)
+
+
+def test_load_and_prepare_drops_pair_of_short_opening(config):
+    assert {"a8", "c8"}.isdisjoint(ids(load_and_prepare("cga-wiki", config)))
 
 
 def test_filter_by_split(examples):
@@ -219,6 +234,7 @@ def test_real_data_with_project_config():
     for e in result:
         assert e["split"] in config["splits"]
         assert config["min_speakers"] <= count_speakers(e["seed"]) <= config["max_speakers"]
+        assert len(e["seed"]["opening_turns"]) >= config["min_opening_turns"]
     if config["keep_pairs"]:
         outcomes = [e["real_outcome"] for e in result]
         assert outcomes.count(0) == outcomes.count(1)

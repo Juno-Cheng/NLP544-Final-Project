@@ -9,6 +9,10 @@ labels_path: data/processed/labels.jsonl
 # Re-run prepare_data.py after changing; --opening-turns N overrides this for one run.
 opening_turns: 3
 
+# Drop seeds whose opening is shorter than this, used by data_loader.py.
+# Openings stop before the first attack, so short ones are mostly attack conversations.
+min_opening_turns: 3
+
 # Keep only openings with this many distinct speakers (simulation assumes 2 agents)
 min_speakers: 2
 max_speakers: 2
