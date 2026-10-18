@@ -105,7 +105,7 @@ NLP544-Final-Project/
 ## Setup
 
 ```bash
-python -m venv .venv
+python3.13 -m venv .venv
 # Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then add your API key(s); never commit .env
@@ -130,6 +130,84 @@ To be filled in once the integration command exists:
 python scripts/run_experiment.py   # paired static/dynamic run, judge, evaluate
 pytest                             # run all tests
 ```
+
+## Arya's reply generator
+
+Activate the project-local environment with `source .venv/bin/activate`.
+The current local environment includes Python 3.13 under `.venv/runtime`;
+`.venv` is ignored by Git and is not portable between machines.
+
+The generator is a callable object compatible with the `ResponseGenerator` type
+from `src/schemas.py`. It also exposes the same operation as `generate_reply()`.
+No API calls occur on import. A small offline example:
+
+```python
+import json
+from pathlib import Path
+from src.llm_client import MockLLMClient
+from src.response_generator import PersonaResponseGenerator
+from src.schemas import AgentState, ConversationSeed, GenerationConfig, from_dict
+
+seed = from_dict(ConversationSeed, json.loads(
+    Path("tests/fixtures/sample_seed.json").read_text(encoding="utf-8")))
+config = GenerationConfig("mock", 0.3, 256, "reply_v1", 544)
+events = []  # In the runner, bind this callback to the current run's metadata collector.
+generator = PersonaResponseGenerator(
+    MockLLMClient(["Could you explain what made it irrelevant?"]),
+    on_generation=events.append,
+)
+reply = generator(seed.opening_turns, AgentState("A", 0.7, {"role": "editor"}), config)
+print(reply)
+```
+
+For a live reply, export `OPENAI_API_KEY` and `OPENAI_MODEL` in your shell.
+`.env` is not automatically loaded. With the same `seed` and imports above:
+
+```python
+import os
+from openai import OpenAI
+from src.llm_client import OpenAILLMClient
+
+config = GenerationConfig(os.environ["OPENAI_MODEL"], 0.3, 256, "reply_v1", 544)
+with OpenAI(timeout=30.0, max_retries=2) as sdk:
+    generator = PersonaResponseGenerator(OpenAILLMClient(sdk), on_generation=events.append)
+    reply = generator(seed.opening_turns, AgentState("A", 0.7, {"role": "editor"}), config)
+    print(reply.text)
+```
+
+The model ID is intentionally caller-selected. The client uses the
+[OpenAI Responses API](https://developers.openai.com/api/reference/python/resources/responses/methods/create).
+Use a model that accepts temperature, or explicitly construct
+`OpenAILLMClient(sdk, send_temperature=False)` for models that do not; use the
+same choice in both arms. Unsupported settings otherwise fail visibly. No automatic
+model replacement or parameter-dropping fallback occurs.
+
+`random_seed` remains required by the shared schema, but Responses has no seed
+parameter: metadata records `random_seed_requested` and `random_seed_applied=None`.
+It also records requested/returned model IDs, requested/applied temperature, token
+usage when available, latency, prompt version/hash, and the output turn/speaker IDs.
+Cost is `None`, not an invented estimate. Bind one metadata collector per run;
+the callback receives no transcript or trust values and callback failures propagate.
+The experiment owner still needs to wire these events into `RunMetadata`.
+
+The generator requires an ordered, nonempty two-speaker history and returns
+`last_turn_id + 1`. It never appends the reply to the caller's history or updates
+trust; the simulator does that. Turn-ID allocation and the proposed trust wording
+in `reply_v1.txt` should be confirmed with Aditya and Magnus before the live pilot.
+Incomplete, refused, blank, and failed responses raise `GenerationError`; the
+runner must record failed runs. No raw provider error body is included in our
+exception message. SDK retries are bounded by the caller's `max_retries`.
+
+Run the offline tests (temporary test files stay inside the project):
+
+```bash
+python -m pytest tests/test_response_generator.py tests/test_llm_client.py -q --basetemp=.venv/test-tmp
+python -m pytest -q --basetemp=.venv/test-tmp
+```
+
+Tests use canned responses and a fake HTTP transport with a fake API key. They
+make no paid API calls. Live one-reply verification and end-to-end paired integration
+remain separate acceptance steps; mock success is not evidence of research efficacy.
 
 ## Workflow
 

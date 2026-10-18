@@ -2,7 +2,7 @@
 
 Owner: Arya. Scope: runtime LLM client, versioned reply prompts, and persona-conditioned reply generation for the CSCI 544 static-versus-dynamic trust project.
 
-This checklist captures the October 16–17, 2026 milestone requirements; it is not a claim that implementation is complete. At preparation, the relevant source, prompt, and test files are empty placeholders.
+This checklist captures the October 16–17, 2026 milestone requirements; it is not a claim that implementation is complete. The initial repository contained placeholders. The current implementation status is recorded below; unchecked handoff items still require integration or live evidence.
 
 ## Working guardrails
 
@@ -96,3 +96,37 @@ The October 18 target is five live paired examples (ten continuations), led by P
 - Previously reviewed user-provided `MIDTERM_IMPLEMENTATION_GUIDE.md` and `nlp proj team plan.docx`; these remain reference context and are not copied into this repository by this change.
 
 The checklist records requirements and acceptance evidence. Unchecked items must remain unchecked until verified; neither example commands nor illustrative output prove completion.
+
+## Implementation status — October 18, 2026
+
+Implemented in the existing `src/llm_client.py`, `src/response_generator.py`, and
+`prompts/reply_v1.txt`, using PR #3's shared dataclasses without modifying them.
+`PersonaResponseGenerator` supports both `__call__` and `generate_reply`; clients
+are injected through a small protocol. The OpenAI adapter uses Responses and the
+mock client captures deterministic requests. A metadata callback preserves the
+shared return type. Tests live in `tests/test_response_generator.py` and the one
+new module-specific file `tests/test_llm_client.py`.
+
+- [x] Project-local Python 3.13 virtual environment created.
+- [x] Generator consumes current trust, stable traits, actor identity, and ordered history.
+- [x] Mock and real-provider adapters implemented; no live request is made automatically.
+- [x] Offline tests exercise role handling, trust changes, unchanged inputs, metadata,
+  invalid inputs, empty/refused/incomplete responses, SDK retries, and timeouts.
+- [x] Shared schema and fixture files remain unchanged.
+- [x] README documents the caller interface, mock example, and opt-in live example.
+- [ ] Select an accessible GPT model and demonstrate one real reply with API credentials.
+- [ ] Confirm prompt trust semantics and next-turn-ID convention with Magnus/Aditya.
+- [ ] Integrate usage events into Prakhar's run metadata and verify a full paired run.
+- [ ] Team review, PR creation, and merge.
+
+The Responses API does not apply `random_seed`; this is explicitly reported in
+metadata. Temperature may be explicitly omitted for a model that does not support
+it, with that decision recorded and kept identical across arms. Prompt wording
+is an engineering proposal, not a validated psychological model. No accuracy or
+predictive-improvement claim follows from these software tests.
+
+Validation in `.venv` (Python 3.13.16): **86 passed, 6 skipped** for the full
+suite, including **31 passing generator/client tests**. The six skips require
+locally downloaded corpus data. Ruff checks on the four implemented Python files,
+`pip check`, documentation links, and the README mock example pass. No API key or
+model is configured in the shell, so no live generation was attempted.
