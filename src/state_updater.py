@@ -60,8 +60,6 @@ class TrustUpdater:
         settings = settings or load_config()
         self.version = settings["updater_version"]
         self.alpha = float(settings["alpha"])
-        if not 0.0 < self.alpha <= 1.0:
-            raise ValueError(f"alpha must be in (0, 1], got {self.alpha}")
         rater = settings["rater"]
         self.rater_config = GenerationConfig(
             model_id, rater["temperature"], rater["max_output_tokens"], rater["prompt_version"], rater["random_seed"]
@@ -69,15 +67,6 @@ class TrustUpdater:
         self.instructions = (PROMPTS_DIR / f"{rater['prompt_version']}.txt").read_text(encoding="utf-8")
         self.client = client
         self.on_rating = on_rating
-
-    def __call__(
-        self,
-        current_state: AgentState,
-        observed_turn: DialogueTurn,
-        visible_history: list[DialogueTurn],
-        config: UpdaterConfig,
-    ) -> StateUpdateResult:
-        return self.update_state(current_state, observed_turn, visible_history, config)
 
     def update_state(
         self,
@@ -124,3 +113,5 @@ class TrustUpdater:
                 }
             )
         return rating
+
+    __call__ = update_state
