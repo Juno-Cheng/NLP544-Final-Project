@@ -19,6 +19,8 @@ T = TypeVar("T")
 
 CONDITIONS = ("static", "dynamic")
 Condition = Literal["static", "dynamic"]
+DEFAULT_RUBRIC_PATH = "prompts/judge_rubric_v1.txt"
+JudgeCallable = Callable[[str], Any]
 
 
 def to_dict(obj: Any) -> dict[str, Any]:
@@ -80,10 +82,13 @@ def _convert(typ: Any, value: Any, path: str) -> Any:
         key_type, value_type = get_args(typ)
         converted: dict[Any, Any] = {}
         for key, item in value.items():
-            if not isinstance(key, key_type):
-                raise ValueError(f"{path} keys must be {key_type.__name__}")
-            converted[key] = _convert(value_type, item, f"{path}.{key}")
+            converted_key = _dict_key(key_type, key, path)
+            converted[converted_key] = _convert(value_type, item, f"{path}.{converted_key}")
         return converted
+    if origin is Callable:
+        if not callable(value):
+            raise ValueError(f"{path} must be callable")
+        return value
     if isinstance(typ, type) and is_dataclass(typ):
         return from_dict(typ, value, path)
     if typ is bool:
@@ -105,6 +110,20 @@ def _convert(typ: Any, value: Any, path: str) -> Any:
     raise TypeError(f"unsupported schema type {typ!r} at {path}")
 
 
+def _dict_key(key_type: Any, key: Any, path: str) -> Any:
+    if key_type is int:
+        if isinstance(key, bool):
+            raise ValueError(f"{path} keys must be ints")
+        if isinstance(key, int):
+            return key
+        if isinstance(key, str) and key.isdecimal():
+            return int(key)
+        raise ValueError(f"{path} keys must be ints")
+    if not isinstance(key, key_type):
+        raise ValueError(f"{path} keys must be {getattr(key_type, '__name__', key_type)}")
+    return key
+
+
 def _optional_inner(typ: Any) -> Any:
     origin = get_origin(typ)
     if origin not in (Union, UnionType):
@@ -124,6 +143,19 @@ def _nonempty(value: str, field: str) -> None:
 def _unit_interval(value: float, field: str) -> None:
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{field} must be between 0 and 1, got {value}")
+
+
+def _signed_unit(value: float, field: str) -> None:
+    if not -1.0 <= value <= 1.0:
+        raise ValueError(f"{field} must be between -1 and 1, got {value}")
+
+
+def _outcome_counts(counts: dict[int, int], field: str) -> None:
+    for key, count in counts.items():
+        if isinstance(key, bool) or key not in (0, 1):
+            raise ValueError(f"{field} keys must be 0 or 1")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"{field} counts must be nonnegative ints")
 
 
 def _string_keyed(value: dict, field: str) -> None:
@@ -312,6 +344,7 @@ class RunMetadata:
     prompt_version: str
     updater_version: str
     max_generated_turns: int
+    max_output_tokens: int
     temperature: float
     random_seed: int
     error: str | None = None
@@ -324,6 +357,8 @@ class RunMetadata:
             _nonempty(getattr(self, field), field)
         if self.max_generated_turns <= 0:
             raise ValueError("max_generated_turns must be positive")
+        if self.max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be positive")
         if self.temperature < 0:
             raise ValueError("temperature must be >= 0")
         if self.error is not None:
@@ -368,14 +403,20 @@ class SimulationResult:
 
 @dataclass(frozen=True)
 class JudgeConfig:
-    """Rubric and judge model. Condition, trust, and labels do not belong here."""
+    """Rubric and judge model. Condition, trust, and labels do not belong here.
+
+    judge_callable is injected at runtime and is absent from configs/judge.yaml.
+    """
 
     judge_model_id: str
     rubric_version: str
+    rubric_path: str = DEFAULT_RUBRIC_PATH
+    judge_callable: JudgeCallable | None = None
 
     def __post_init__(self) -> None:
         _nonempty(self.judge_model_id, "judge_model_id")
         _nonempty(self.rubric_version, "rubric_version")
+        _nonempty(self.rubric_path, "rubric_path")
 
 
 @dataclass(frozen=True)
@@ -431,49 +472,139 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class PairedComparison:
-    """One source conversation after both arms are scored. Missing scores mean that arm failed."""
+    """One source conversation whose static and dynamic arms both scored."""
 
     conversation_id: str
     real_outcome: int
-    static_run_id: str | None
-    dynamic_run_id: str | None
-    static_score: float | None
-    dynamic_score: float | None
+    static_run_id: str
+    dynamic_run_id: str
+    static_score: float
+    dynamic_score: float
+    score_delta: float
     status: str
+    unverified_pair_settings: list[str]
     pair_id: str | None = None
 
     def __post_init__(self) -> None:
         _nonempty(self.conversation_id, "conversation_id")
+        _nonempty(self.static_run_id, "static_run_id")
+        _nonempty(self.dynamic_run_id, "dynamic_run_id")
         _nonempty(self.status, "status")
         if self.real_outcome not in (0, 1):
             raise ValueError(f"real_outcome must be 0 or 1, got {self.real_outcome}")
         if self.pair_id is not None:
             _nonempty(self.pair_id, "pair_id")
-        for field in ("static_score", "dynamic_score"):
-            score = getattr(self, field)
-            if score is not None:
-                _unit_interval(score, field)
+        _unit_interval(self.static_score, "static_score")
+        _unit_interval(self.dynamic_score, "dynamic_score")
+        _signed_unit(self.score_delta, "score_delta")
+        if abs(self.score_delta - (self.dynamic_score - self.static_score)) > 1e-9:
+            raise ValueError("score_delta must equal dynamic_score - static_score")
+        if any(not item.strip() for item in self.unverified_pair_settings):
+            raise ValueError("unverified_pair_settings entries must be non-empty")
+
+
+@dataclass(frozen=True)
+class ExcludedPair:
+    """A source conversation left out of the metrics, with the reason for each missing piece."""
+
+    conversation_id: str
+    real_outcome: int
+    static_run_id: str | None
+    dynamic_run_id: str | None
+    reasons: list[str]
+
+    def __post_init__(self) -> None:
+        _nonempty(self.conversation_id, "conversation_id")
+        if self.real_outcome not in (0, 1):
+            raise ValueError(f"real_outcome must be 0 or 1, got {self.real_outcome}")
+        for field in ("static_run_id", "dynamic_run_id"):
+            value = getattr(self, field)
+            if value is not None:
+                _nonempty(value, field)
+        if not self.reasons or any(not reason.strip() for reason in self.reasons):
+            raise ValueError("reasons must be a non-empty list of messages")
+
+
+@dataclass(frozen=True)
+class CoverageReport:
+    """How many source conversations were attempted, scored, and left out."""
+
+    n_examples: int
+    n_attempted: int
+    n_completed_pairs: int
+    n_excluded: int
+    completion_rate: float | None
+    label_counts_selected: dict[int, int]
+    label_counts_evaluated: dict[int, int]
+
+    def __post_init__(self) -> None:
+        counts = (self.n_examples, self.n_attempted, self.n_completed_pairs, self.n_excluded)
+        if any(count < 0 for count in counts):
+            raise ValueError("coverage counts must be >= 0")
+        if self.n_attempted > self.n_examples or self.n_completed_pairs > self.n_examples:
+            raise ValueError("coverage counts cannot exceed n_examples")
+        if self.n_examples == 0:
+            if self.completion_rate is not None:
+                raise ValueError("completion_rate must be null when there are no examples")
+        elif self.completion_rate is None:
+            raise ValueError("completion_rate is required when there are examples")
+        elif abs(self.completion_rate - (self.n_completed_pairs / self.n_examples)) > 1e-9:
+            raise ValueError("completion_rate must equal n_completed_pairs / n_examples")
+        _outcome_counts(self.label_counts_selected, "label_counts_selected")
+        _outcome_counts(self.label_counts_evaluated, "label_counts_evaluated")
+
+
+@dataclass(frozen=True)
+class EvaluationMetrics:
+    """Descriptive scores on completed pairs. None means the statistic is undefined."""
+
+    n_pairs: int
+    label_counts: dict[int, int]
+    roc_auc_static: float | None
+    roc_auc_dynamic: float | None
+    roc_auc_delta: float | None
+    spearman_static: float | None
+    spearman_dynamic: float | None
+    spearman_delta: float | None
+    mean_score_delta: float | None
+
+    def __post_init__(self) -> None:
+        if self.n_pairs < 0:
+            raise ValueError("n_pairs must be >= 0")
+        _outcome_counts(self.label_counts, "label_counts")
+        for field in ("roc_auc_static", "roc_auc_dynamic"):
+            value = getattr(self, field)
+            if value is not None:
+                _unit_interval(value, field)
+        for field in ("roc_auc_delta", "spearman_static", "spearman_dynamic", "mean_score_delta"):
+            value = getattr(self, field)
+            if value is not None:
+                _signed_unit(value, field)
+        if self.spearman_delta is not None and not -2.0 <= self.spearman_delta <= 2.0:
+            raise ValueError(f"spearman_delta must be between -2 and 2, got {self.spearman_delta}")
 
 
 @dataclass(frozen=True)
 class EvaluationSummary:
     """Joined comparison of static and dynamic scores against held-out labels."""
 
-    n_examples: int
-    n_paired_complete: int
-    rows: list[PairedComparison]
-    auc_static: float | None = None
-    auc_dynamic: float | None = None
+    pairs: list[PairedComparison]
+    excluded: list[ExcludedPair]
+    coverage: CoverageReport
+    metrics: EvaluationMetrics
+    unverified_pair_settings: list[str]
+    notes: list[str]
 
     def __post_init__(self) -> None:
-        if self.n_examples < 0 or self.n_paired_complete < 0:
-            raise ValueError("evaluation counts must be >= 0")
-        if self.n_paired_complete > self.n_examples:
-            raise ValueError("n_paired_complete cannot exceed n_examples")
-        for field in ("auc_static", "auc_dynamic"):
-            auc = getattr(self, field)
-            if auc is not None:
-                _unit_interval(auc, field)
+        if self.coverage.n_completed_pairs != len(self.pairs) or self.metrics.n_pairs != len(self.pairs):
+            raise ValueError("completed-pair counts must equal len(pairs)")
+        if self.coverage.n_excluded != len(self.excluded):
+            raise ValueError("coverage.n_excluded must equal len(excluded)")
+        if self.coverage.n_completed_pairs + self.coverage.n_excluded != self.coverage.n_examples:
+            raise ValueError("completed and excluded pairs must account for every example")
+        expected = sorted({key for row in self.pairs for key in row.unverified_pair_settings})
+        if list(self.unverified_pair_settings) != expected:
+            raise ValueError("unverified_pair_settings must be the sorted union of the pair lists")
 
 
 ResponseGenerator = Callable[[list[DialogueTurn], AgentState, GenerationConfig], DialogueTurn]
