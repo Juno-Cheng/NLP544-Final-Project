@@ -1,0 +1,16 @@
+# Trust-update settings read by src/state_updater.py.
+# Provisional defaults (owner: Magnus); bump updater_version whenever anything here changes.
+
+updater_version: trust_v1
+
+# Weight of the newest rating: trust' = (1 - alpha) * trust + alpha * rating.
+# Only the dynamic condition uses it; static trust never changes.
+alpha: 0.3
+
+# Rater call settings (dynamic only). The model id is passed in by the caller,
+# like the reply generator, so both use the same OPENAI_MODEL.
+rater:
+  prompt_version: trust_update_v1
+  temperature: 0.0
+  max_output_tokens: 16
+  random_seed: 544

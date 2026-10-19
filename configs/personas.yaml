@@ -1,0 +1,17 @@
+# Persona settings read by src/persona.py.
+# Provisional smoke-test defaults (owner: Magnus); record changes in DECISIONS.md.
+#
+# The opening's first speaker plays A, the other plays B. Both roles share the
+# same traits so the arms differ only in trust policy, not in who got which persona.
+# initial_trust is a modeled starting value in [0, 1], not a measured human score.
+# Both arms start from it after the opening; opening turns do not update trust.
+
+A: &editor
+  initial_trust: 0.7
+  stable_traits:
+    role: Wikipedia editor
+    temperament: even-tempered but firm about content
+    experience: regular contributor familiar with editing policy
+    goal: keep the article accurate and policy-compliant
+
+B: *editor
