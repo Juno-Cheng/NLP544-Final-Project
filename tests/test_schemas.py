@@ -161,6 +161,7 @@ def test_data_yaml_matches_data_config():
     assert config.splits == ["test"]
     assert config.sample_size == 20
     assert config.keep_pairs is True
+    assert config.min_opening_turns == 3
 
 
 def test_evaluation_summary_round_trip():
@@ -212,6 +213,7 @@ def test_prepared_examples_match_labeled_example_schema(tmp_path):
             "labels_path": str(labels_path),
             "splits": ["test"],
             "verified_only": False,
+            "min_opening_turns": 2,
             "min_speakers": 2,
             "max_speakers": 2,
             "keep_pairs": False,

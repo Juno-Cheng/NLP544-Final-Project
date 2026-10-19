@@ -402,6 +402,7 @@ class DataConfig:
     seeds_path: str
     labels_path: str
     opening_turns: int
+    min_opening_turns: int
     min_speakers: int
     max_speakers: int
     splits: list[str]
@@ -416,6 +417,10 @@ class DataConfig:
         _nonempty(self.labels_path, "labels_path")
         if self.opening_turns <= 0:
             raise ValueError("opening_turns must be positive")
+        if self.min_opening_turns <= 0:
+            raise ValueError("min_opening_turns must be positive")
+        if self.min_opening_turns > self.opening_turns:
+            raise ValueError("min_opening_turns cannot exceed opening_turns")
         if self.min_speakers < 1 or self.max_speakers < self.min_speakers:
             raise ValueError("speaker bounds must satisfy 1 <= min_speakers <= max_speakers")
         if not self.splits or any(not split.strip() for split in self.splits):
