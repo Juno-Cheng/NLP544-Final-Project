@@ -11,12 +11,13 @@ from types import SimpleNamespace
 import pytest
 
 from src.persona import assign_personas, describe_trust, initialize_personas, load_persona_configs
+from src.persona import load_config as load_persona_file  # name clash with state_updater.load_config
 from src.schemas import ConversationSeed, DialogueTurn, UpdaterConfig, from_dict
 from src.state_updater import TrustUpdater, load_config
 
 FIXTURES = Path(__file__).parent / "fixtures"
-STATIC = UpdaterConfig("static", "trust_v1")
-DYNAMIC = UpdaterConfig("dynamic", "trust_v1")
+STATIC = UpdaterConfig("static", "trust_v2")
+DYNAMIC = UpdaterConfig("dynamic", "trust_v2")
 
 
 class FakeClient:
@@ -26,7 +27,7 @@ class FakeClient:
 
     def complete(self, instructions, payload, config):
         self.requests.append({"instructions": instructions, "payload": payload, "config": config})
-        return SimpleNamespace(text=self.replies.pop(0))
+        return SimpleNamespace(text=self.replies.pop(0), metadata={"provider": "fake", "token_usage": {"total": 7}})
 
 
 @pytest.fixture
@@ -44,8 +45,8 @@ def _seed_with(*speakers):
     return from_dict(ConversationSeed, {"conversation_id": "c1", "source": "cga-wiki", "opening_turns": turns})
 
 
-def _updater(*replies, alpha=0.3):
-    return TrustUpdater(FakeClient(*replies), "mock", {**load_config(), "alpha": alpha})
+def _updater(*replies, alpha=0.5, on_rating=None):
+    return TrustUpdater(FakeClient(*replies), "mock", {**load_config(), "alpha": alpha}, on_rating=on_rating)
 
 
 def test_persona_config_defines_both_roles_with_same_traits():
@@ -79,12 +80,29 @@ def test_initialize_personas_gives_each_arm_independent_copies(seed):
 
 @pytest.mark.parametrize(
     ("trust", "level"),
-    [(1.0, "high"), (0.67, "high"), (0.66, "guarded"), (0.34, "guarded"), (0.33, "low"), (0.0, "low")],
+    [
+        (1.0, "trusting"),
+        (0.9, "trusting"),
+        (0.89, "cordial"),
+        (0.75, "open"),
+        (0.5, "cautious"),
+        (0.49, "wary"),
+        (0.1, "adversarial"),
+        (0.09, "accusatory"),
+        (0.0, "accusatory"),
+    ],
 )
 def test_describe_trust_picks_band_at_boundaries(trust, level):
     described = describe_trust(trust)
     assert described["level"] == level
     assert described["behavior"].strip()
+
+
+def test_ten_distinct_levels_and_start_is_open():
+    levels = load_persona_file()["trust_levels"]
+    assert len(levels) == 10
+    assert len({band["level"] for band in levels}) == 10
+    assert describe_trust(load_persona_configs()["A"].initial_trust)["level"] == "open"
 
 
 def test_describe_trust_rejects_bands_that_miss_zero():
@@ -101,14 +119,37 @@ def test_static_trust_never_changes_and_skips_rater(seed, states):
     assert updater.client.requests == []
 
 
-def test_dynamic_trust_moves_toward_rating(seed, states):
+def test_dynamic_trust_shifts_by_rating_around_neutral(seed, states):
     history = list(seed.opening_turns)
     hostile = _updater("0").update_state(states["A"], history[-1], history, DYNAMIC)
-    friendly = _updater("1").update_state(states["A"], history[-1], history, DYNAMIC)
-    assert hostile.state.trust == pytest.approx(0.7 * 0.7)
-    assert friendly.state.trust == pytest.approx(0.7 * 0.7 + 0.3)
-    assert hostile.previous_trust == 0.7
-    assert states["A"].trust == 0.7
+    curt = _updater("0.25").update_state(states["A"], history[-1], history, DYNAMIC)
+    warm = _updater("1").update_state(states["A"], history[-1], history, DYNAMIC)
+    assert hostile.state.trust == pytest.approx(0.5)
+    assert curt.state.trust == pytest.approx(0.625)
+    assert warm.state.trust == pytest.approx(1.0)
+    assert hostile.previous_trust == 0.75
+    assert states["A"].trust == 0.75
+
+
+def test_neutral_rating_leaves_trust_unchanged(seed, states):
+    history = list(seed.opening_turns)
+    assert _updater("0.5").update_state(states["A"], history[-1], history, DYNAMIC).state.trust == 0.75
+
+
+def test_on_rating_reports_usage_for_cost_logging(seed, states):
+    history = list(seed.opening_turns)
+    logged = []
+    _updater("0.3", on_rating=logged.append).update_state(states["A"], history[-1], history, DYNAMIC)
+    assert logged == [
+        {
+            "provider": "fake",
+            "token_usage": {"total": 7},
+            "turn_id": history[-1].turn_id,
+            "reader_id": "A",
+            "rating": 0.3,
+            "prompt_version": "trust_update_v2",
+        }
+    ]
 
 
 def test_dynamic_trust_stays_bounded_over_many_turns(seed, states):
@@ -157,5 +198,7 @@ def test_updater_version_mismatch_raises(seed, states):
 
 def test_default_config_builds_rater_call():
     updater = TrustUpdater(FakeClient(), "mock")
-    assert updater.rater_config.prompt_version == "trust_update_v1"
+    assert updater.version == "trust_v2"
+    assert updater.alpha == 0.5
+    assert updater.rater_config.prompt_version == "trust_update_v2"
     assert updater.instructions.strip()

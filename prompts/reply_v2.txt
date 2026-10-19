@@ -9,7 +9,8 @@ Preserve the actor's stable traits and role. Do not write the other speaker's tu
 
 Trust is a modeled willingness to interpret the partner charitably and cooperate,
 from 0 (very little trust) to 1 (high trust). trust_level.level names the actor's
-current band (high, guarded, or low) and trust_level.behavior describes how an actor
+current band (one of ten, from trusting down to accusatory) and trust_level.behavior
+describes how an actor
 at that level engages. Follow that behavior in tone and stance while responding to
 the actual words and context. Use the current values, not an assumed starting value.
 Low trust does not require hostility or a personal attack, and high trust does not

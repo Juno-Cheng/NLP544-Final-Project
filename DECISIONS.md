@@ -106,6 +106,26 @@ The specific CLI flags may be adjusted by Prakar; what matters is one reproducib
 - [ ] Define who gives final approval for interface changes after Oct 14.
 - [ ] Jon coordinates slide/report assembly; confirm the speaker and final uploader.
 
+## F. Trust design (owner: Magnus, decided Oct 18; resolves A2 for persona/state)
+Implemented in `src/persona.py`, `src/state_updater.py`, `configs/personas.yaml`, `configs/updater.yaml` (`trust_v2`).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Meaning | Trust = modeled willingness to read the partner charitably and cooperate, 0..1 (matches Arya's `reply_v1` wording). | One definition across updater and prompt; not a measured human score. |
+| Who updates | Both agents; the **receiver** of a new message updates, using only visible turns. | Symmetric; speaker order cannot bias the result. |
+| Initialization | Both arms start at **0.75** after the opening; opening turns never update trust. | Cleanest contrast for the midterm. Replaying the opening through the updater is the first post-midterm experiment. |
+| Personas | A and B share identical stable traits; the opening's first speaker is A. | Only the trust policy differs between agents and arms. |
+| Signal | An LLM rater (same model as the generator, temperature 0) scores the observed message's cooperativeness 0..1 from the full visible conversation. It never sees trust. | Reads context; no feedback loop from trust into ratings. |
+| Rule | `trust' = clamp(trust + 0.5 * (rating - 0.5))`, symmetric. | A neutral message (0.5 = polite, businesslike disagreement) leaves trust unchanged, so dynamic differs from static only because of what was said. |
+| Prompt | Reply prompt gets the number plus one of **10 equal bands** (word + behavior sentence covering interpretation, justification, cooperation and tone); `prompts/reply_v2.txt`. | Words make trust changes visible to the model; the number keeps within-band changes. |
+| Floor | The lowest bands are sharp and accusatory about actions but never instruct insults or personal attacks. | Escalation must be measured, not prompted, or the judge scores our band wording. |
+| Rater failure | A non-numeric or out-of-range rating raises; the run is logged as failed. | Silently holding trust would turn dynamic into static. |
+| Snapshots | `StateSnapshot(turn_id=k)` = trust after turn k **and** the receiver's update. | Matches the schema docstring; records each update causally. |
+| Cost | `TrustUpdater(on_rating=...)` reports rater usage like the generator's `on_generation`. | Rater calls count toward run cost. |
+| Validation | `scripts/check_rater.py` rates 10 attack + 10 civil train-split comments once before the live run; pass = every attack scores below the civil mean. | Labels used only to validate the rater, never in the experiment. |
+
+All values are frozen once held-out testing starts; any change bumps `updater_version`.
+
 # Midterm Implementation Guide — What We Are Actually Building
 **CSCI 544 | October 13, 2026 | Informational companion, not a new specification**
 

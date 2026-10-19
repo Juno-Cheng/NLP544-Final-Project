@@ -1,20 +1,21 @@
 """Static and dynamic trust updates for an agent that just observed its partner's turn.
 
 Static keeps trust fixed and makes no model call. Dynamic asks a rater model how
-cooperative the observed turn is (rating in [0, 1]) and moves trust toward it:
-    trust' = (1 - alpha) * trust + alpha * rating
-which stays in [0, 1] without clamping.
+cooperative the observed turn is (rating in [0, 1], 0.5 = neutral) and shifts trust by it:
+    trust' = clamp(trust + alpha * (rating - 0.5))
+so a neutral message leaves trust unchanged.
 
 Usage:
-    updater = TrustUpdater(client, model_id=os.environ["OPENAI_MODEL"])
-    result = updater(state, observed_turn, visible_history, UpdaterConfig("dynamic", "trust_v1"))
+    updater = TrustUpdater(client, model_id=os.environ["OPENAI_MODEL"], on_rating=log)
+    result = updater(state, observed_turn, visible_history, UpdaterConfig("dynamic", updater.version))
 
 The client is anything with complete(instructions, payload, config) returning an
-object with .text, i.e. the LLMClient protocol from src/llm_client.py.
+object with .text and .metadata, i.e. the LLMClient protocol from src/llm_client.py.
 """
 
 import json
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -48,7 +49,14 @@ def parse_rating(text: str) -> float:
 class TrustUpdater:
     """Callable StateUpdater for run_simulation; the client is only called in the dynamic condition."""
 
-    def __init__(self, client: Any, model_id: str, settings: dict | None = None) -> None:
+    def __init__(
+        self,
+        client: Any,
+        model_id: str,
+        settings: dict | None = None,
+        *,
+        on_rating: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         settings = settings or load_config()
         self.version = settings["updater_version"]
         self.alpha = float(settings["alpha"])
@@ -60,6 +68,7 @@ class TrustUpdater:
         )
         self.instructions = (PROMPTS_DIR / f"{rater['prompt_version']}.txt").read_text(encoding="utf-8")
         self.client = client
+        self.on_rating = on_rating
 
     def __call__(
         self,
@@ -89,7 +98,7 @@ class TrustUpdater:
         if config.condition == "static":
             return StateUpdateResult(current_state, current_state.trust)
         rating = self.rate(current_state.speaker_id, observed_turn, visible_history)
-        trust = (1 - self.alpha) * current_state.trust + self.alpha * rating
+        trust = min(1.0, max(0.0, current_state.trust + self.alpha * (rating - 0.5)))
         return StateUpdateResult(replace(current_state, trust=trust), current_state.trust)
 
     def rate(self, reader_id: str, observed_turn: DialogueTurn, visible_history: list[DialogueTurn]) -> float:
@@ -102,4 +111,16 @@ class TrustUpdater:
             },
             ensure_ascii=False,
         )
-        return parse_rating(self.client.complete(self.instructions, payload, self.rater_config).text)
+        completion = self.client.complete(self.instructions, payload, self.rater_config)
+        rating = parse_rating(completion.text)
+        if self.on_rating is not None:
+            self.on_rating(
+                {
+                    **completion.metadata,
+                    "turn_id": observed_turn.turn_id,
+                    "reader_id": reader_id,
+                    "rating": rating,
+                    "prompt_version": self.rater_config.prompt_version,
+                }
+            )
+        return rating

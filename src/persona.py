@@ -4,7 +4,7 @@ Usage:
     by_role = load_persona_configs()             # {"A": PersonaConfig, "B": PersonaConfig}
     personas = assign_personas(seed, by_role)    # keyed by the seed's real speaker_ids
     states = initialize_personas(personas)       # call once per arm; never reuse across arms
-    describe_trust(states["Sirex98"].trust)       # {"level": "high", "behavior": "..."} for the reply prompt
+    describe_trust(states["Sirex98"].trust)       # {"level": "open", "behavior": "..."} for the reply prompt
 """
 
 from copy import deepcopy
