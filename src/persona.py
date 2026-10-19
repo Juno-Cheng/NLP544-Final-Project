@@ -8,6 +8,7 @@ Usage:
 """
 
 from copy import deepcopy
+from functools import cache
 from pathlib import Path
 
 import yaml
@@ -19,8 +20,9 @@ CONFIG_PATH = ROOT / "configs" / "personas.yaml"
 ROLES = ("A", "B")
 
 
+@cache
 def load_config(path: Path = CONFIG_PATH) -> dict:
-    """Read configs/personas.yaml."""
+    """Read configs/personas.yaml once per process, so bands cannot change mid-run. Do not mutate."""
     with Path(path).open(encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -35,7 +37,7 @@ def load_persona_configs(path: Path = CONFIG_PATH) -> dict[str, PersonaConfig]:
 
 def describe_trust(trust: float, levels: list[dict] | None = None) -> dict[str, str]:
     """Level word and behavior for a trust value: the highest band whose min it reaches."""
-    levels = levels or load_config()["trust_levels"]
+    levels = load_config()["trust_levels"] if levels is None else levels
     for band in sorted(levels, key=lambda band: band["min"], reverse=True):
         if trust >= band["min"]:
             return {"level": band["level"], "behavior": band["behavior"]}

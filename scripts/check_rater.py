@@ -1,8 +1,9 @@
 """One-off check that the trust rater scores real attacks below civil comments (DECISIONS.md F).
 
 Rates N attack comments and N comments from civil conversations in the CGA-WIKI train
-split, each with up to 8 preceding comments as context. Labels are used only here, to
-validate the rater; nothing from this script feeds the experiment, which uses the test split.
+split, each with up to 8 preceding comments as context, keeping only two-speaker windows.
+Labels are used only here, to validate the rater; nothing from this script feeds the
+experiment, which uses the test split.
 
 Usage:
     export OPENAI_API_KEY=... OPENAI_MODEL=...
@@ -47,6 +48,9 @@ def candidates(corpus, attack: bool) -> list[tuple[str, list[DialogueTurn]]]:
             if bool(utt.meta.get("comment_has_personal_attack")) != attack:
                 continue
             window = utts[max(0, i - CONTEXT_TURNS) : i + 1]
+            # Match the experiment: two speakers, so the reader is the one the comment answers.
+            if len({u.speaker.id for u in window}) != 2:
+                continue
             # The reader is the latest earlier speaker who is not the comment's author.
             readers = [u.speaker.id for u in window[:-1] if u.speaker.id != utt.speaker.id]
             if not readers:

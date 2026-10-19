@@ -105,9 +105,10 @@ def test_ten_distinct_levels_and_start_is_open():
     assert describe_trust(load_persona_configs()["A"].initial_trust)["level"] == "open"
 
 
-def test_describe_trust_rejects_bands_that_miss_zero():
+@pytest.mark.parametrize("levels", [[{"min": 0.5, "level": "high", "behavior": "b"}], []])
+def test_describe_trust_rejects_bands_that_miss_zero(levels):
     with pytest.raises(ValueError, match="lowest min"):
-        describe_trust(0.1, [{"min": 0.5, "level": "high", "behavior": "b"}])
+        describe_trust(0.1, levels)
 
 
 def test_static_trust_never_changes_and_skips_rater(seed, states):
@@ -146,10 +147,34 @@ def test_on_rating_reports_usage_for_cost_logging(seed, states):
             "token_usage": {"total": 7},
             "turn_id": history[-1].turn_id,
             "reader_id": "A",
-            "rating": 0.3,
+            "raw_text": "0.3",
             "prompt_version": "trust_update_v2",
         }
     ]
+
+
+def test_on_rating_reports_failed_ratings_too(seed, states):
+    history = list(seed.opening_turns)
+    logged = []
+    with pytest.raises(ValueError):
+        _updater("Rating: 0.4", on_rating=logged.append).update_state(states["A"], history[-1], history, DYNAMIC)
+    assert logged[0]["raw_text"] == "Rating: 0.4"
+    assert logged[0]["token_usage"] == {"total": 7}
+
+
+def test_trust_lands_on_band_edge_despite_float_error(seed, states):
+    history = list(seed.opening_turns)
+    state = states["A"]
+    for rating in ("0.15", "0.15"):
+        state = _updater(rating).update_state(state, history[-1], history, DYNAMIC).state
+    assert state.trust == 0.4
+    assert describe_trust(state.trust)["level"] == "wary"
+
+
+@pytest.mark.parametrize("alpha", [0.0, -0.5, float("nan"), 1.5])
+def test_bad_alpha_fails_at_construction(alpha):
+    with pytest.raises(ValueError, match="alpha"):
+        _updater(alpha=alpha)
 
 
 def test_dynamic_trust_stays_bounded_over_many_turns(seed, states):
@@ -166,9 +191,9 @@ def test_rater_sees_dialogue_but_not_trust(seed, states):
     updater = _updater("0.5")
     updater(states["A"], history[-1], history, DYNAMIC)
     payload = json.loads(updater.client.requests[0]["payload"])
-    assert set(payload) == {"reader_id", "history", "observed_turn"}
+    assert set(payload) == {"reader_id", "history"}
     assert "trust" not in updater.client.requests[0]["payload"]
-    assert payload["observed_turn"]["speaker_id"] == "B"
+    assert payload["history"][-1]["speaker_id"] == "B"
 
 
 def test_rejects_update_from_own_turn(states):

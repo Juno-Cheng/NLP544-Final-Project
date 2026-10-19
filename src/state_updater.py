@@ -57,9 +57,11 @@ class TrustUpdater:
         *,
         on_rating: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
-        settings = settings or load_config()
+        settings = load_config() if settings is None else settings
         self.version = settings["updater_version"]
         self.alpha = float(settings["alpha"])
+        if not 0.0 < self.alpha <= 1.0:  # also rejects nan, which would silently zero every trust
+            raise ValueError(f"alpha must be in (0, 1], got {self.alpha}")
         rater = settings["rater"]
         self.rater_config = GenerationConfig(
             model_id, rater["temperature"], rater["max_output_tokens"], rater["prompt_version"], rater["random_seed"]
@@ -87,31 +89,28 @@ class TrustUpdater:
         if config.condition == "static":
             return StateUpdateResult(current_state, current_state.trust)
         rating = self.rate(current_state.speaker_id, observed_turn, visible_history)
-        trust = min(1.0, max(0.0, current_state.trust + self.alpha * (rating - 0.5)))
+        # Rounding keeps float error from dropping trust just below a band edge (0.3999... vs 0.4).
+        trust = round(min(1.0, max(0.0, current_state.trust + self.alpha * (rating - 0.5))), 6)
         return StateUpdateResult(replace(current_state, trust=trust), current_state.trust)
 
     def rate(self, reader_id: str, observed_turn: DialogueTurn, visible_history: list[DialogueTurn]) -> float:
-        """Rater's cooperativeness score for observed_turn; it never sees trust, so ratings don't feed back."""
+        """Rater's score for observed_turn (the last visible turn); it never sees trust, so ratings don't feed back."""
         payload = json.dumps(
-            {
-                "reader_id": reader_id,
-                "history": [to_dict(turn) for turn in visible_history],
-                "observed_turn": to_dict(observed_turn),
-            },
+            {"reader_id": reader_id, "history": [to_dict(turn) for turn in visible_history]},
             ensure_ascii=False,
         )
         completion = self.client.complete(self.instructions, payload, self.rater_config)
-        rating = parse_rating(completion.text)
+        # Report before parsing so failed ratings still count toward cost and keep their raw text.
         if self.on_rating is not None:
             self.on_rating(
                 {
                     **completion.metadata,
                     "turn_id": observed_turn.turn_id,
                     "reader_id": reader_id,
-                    "rating": rating,
+                    "raw_text": completion.text,
                     "prompt_version": self.rater_config.prompt_version,
                 }
             )
-        return rating
+        return parse_rating(completion.text)
 
     __call__ = update_state

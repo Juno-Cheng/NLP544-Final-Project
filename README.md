@@ -31,7 +31,8 @@ NLP544-Final-Project/
 │
 ├── prompts/                     # versioned text, so prompt changes show up in diffs
 │   ├── reply_v1.txt             # persona + trust-conditioned reply prompt (Arya)
-│   ├── trust_update_v1.txt      # if the dynamic updater uses the LLM (Magnus)
+│   ├── reply_v2.txt             # reply_v1 plus the 10 trust levels (Magnus, pending Arya review)
+│   ├── trust_update_v2.txt      # LLM rater prompt for the dynamic updater (Magnus)
 │   └── judge_rubric_v1.txt      # blind rubric (Shadi)
 │
 ├── src/                         # one package, one file per owner
