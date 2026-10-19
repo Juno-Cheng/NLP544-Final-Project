@@ -1,0 +1,17 @@
+[
+  {
+    "seed": {
+      "conversation_id": "example_001",
+      "source": "cga-wiki",
+      "opening_turns": [
+        {"turn_id": 0, "speaker_id": "A", "text": "Why did you remove my edit?"},
+        {"turn_id": 1, "speaker_id": "B", "text": "It was not relevant."}
+      ]
+    },
+    "real_outcome": 1,
+    "label_definition": "conversation_has_personal_attack: any comment was judged to contain a personal attack",
+    "split": "test",
+    "pair_id": "example_001_civil",
+    "verified": true
+  }
+]
