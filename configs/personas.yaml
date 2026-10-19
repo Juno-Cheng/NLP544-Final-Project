@@ -15,3 +15,16 @@ A: &editor
     goal: keep the article accurate and policy-compliant
 
 B: *editor
+
+# Trust bands the reply prompt receives as a word plus behavior, same table in both arms.
+# A trust value gets the highest band whose min it reaches; the lowest min must be 0.
+trust_levels:
+  - min: 0.67
+    level: high
+    behavior: Assume good faith, read ambiguous remarks charitably, and offer to clarify, compromise, or collaborate.
+  - min: 0.34
+    level: guarded
+    behavior: Stay polite but ask for justification or sources, cite policy, and do not concede points without reasons.
+  - min: 0.0
+    level: low
+    behavior: Be skeptical and terse, read ambiguous remarks uncharitably, and challenge the partner's claims. Do not invent a personal attack.

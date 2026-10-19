@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.persona import assign_personas, initialize_personas, load_persona_configs
+from src.persona import assign_personas, describe_trust, initialize_personas, load_persona_configs
 from src.schemas import ConversationSeed, DialogueTurn, UpdaterConfig, from_dict
 from src.state_updater import TrustUpdater, load_config
 
@@ -75,6 +75,21 @@ def test_initialize_personas_gives_each_arm_independent_copies(seed):
     static_arm["A"].stable_traits["role"] = "mutated"
     assert dynamic_arm["A"].stable_traits["role"] != "mutated"
     assert personas["A"].stable_traits["role"] != "mutated"
+
+
+@pytest.mark.parametrize(
+    ("trust", "level"),
+    [(1.0, "high"), (0.67, "high"), (0.66, "guarded"), (0.34, "guarded"), (0.33, "low"), (0.0, "low")],
+)
+def test_describe_trust_picks_band_at_boundaries(trust, level):
+    described = describe_trust(trust)
+    assert described["level"] == level
+    assert described["behavior"].strip()
+
+
+def test_describe_trust_rejects_bands_that_miss_zero():
+    with pytest.raises(ValueError, match="lowest min"):
+        describe_trust(0.1, [{"min": 0.5, "level": "high", "behavior": "b"}])
 
 
 def test_static_trust_never_changes_and_skips_rater(seed, states):

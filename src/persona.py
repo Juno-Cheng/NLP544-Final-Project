@@ -4,6 +4,7 @@ Usage:
     by_role = load_persona_configs()             # {"A": PersonaConfig, "B": PersonaConfig}
     personas = assign_personas(seed, by_role)    # keyed by the seed's real speaker_ids
     states = initialize_personas(personas)       # call once per arm; never reuse across arms
+    describe_trust(states["Sirex98"].trust)       # {"level": "high", "behavior": "..."} for the reply prompt
 """
 
 from copy import deepcopy
@@ -18,13 +19,27 @@ CONFIG_PATH = ROOT / "configs" / "personas.yaml"
 ROLES = ("A", "B")
 
 
+def load_config(path: Path = CONFIG_PATH) -> dict:
+    """Read configs/personas.yaml."""
+    with Path(path).open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 def load_persona_configs(path: Path = CONFIG_PATH) -> dict[str, PersonaConfig]:
     """Return the A and B persona configs from configs/personas.yaml."""
-    with Path(path).open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict) or set(data) != set(ROLES):
-        raise ValueError(f"{path} must define exactly the roles {ROLES}")
+    data = load_config(path)
+    if not isinstance(data, dict) or not set(ROLES) <= set(data):
+        raise ValueError(f"{path} must define the roles {ROLES}")
     return {role: from_dict(PersonaConfig, {"persona_id": role, **data[role]}) for role in ROLES}
+
+
+def describe_trust(trust: float, levels: list[dict] | None = None) -> dict[str, str]:
+    """Level word and behavior for a trust value: the highest band whose min it reaches."""
+    levels = levels or load_config()["trust_levels"]
+    for band in sorted(levels, key=lambda band: band["min"], reverse=True):
+        if trust >= band["min"]:
+            return {"level": band["level"], "behavior": band["behavior"]}
+    raise ValueError(f"no trust level covers trust {trust}; the lowest min must be 0")
 
 
 def assign_personas(seed: ConversationSeed, by_role: dict[str, PersonaConfig]) -> dict[str, PersonaConfig]:
