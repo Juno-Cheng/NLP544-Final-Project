@@ -1,0 +1,16 @@
+# Trust-update settings read by src/state_updater.py.
+# Decided by Magnus (see DECISIONS.md section F); bump updater_version whenever anything here changes.
+
+updater_version: trust_v2
+
+# Step size: trust' = clamp(trust + alpha * (rating - 0.5)). A neutral rating of 0.5 leaves trust
+# unchanged. Only the dynamic condition uses it; static trust never changes.
+alpha: 0.5
+
+# Rater call settings (dynamic only). The model id is passed in by the caller,
+# like the reply generator, so both use the same OPENAI_MODEL.
+rater:
+  prompt_version: trust_update_v2
+  temperature: 0.0
+  max_output_tokens: 16
+  random_seed: 544
