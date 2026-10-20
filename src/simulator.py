@@ -68,7 +68,7 @@ def _validate_setup(
     if any(current <= previous for previous, current in pairwise(turn_ids)):
         raise ValueError("opening turn_ids must be strictly increasing")
 
-    for field in ("model_id", "max_generated_turns", "temperature", "random_seed"):
+    for field in ("model_id", "max_generated_turns", "max_output_tokens", "temperature", "random_seed"):
         if getattr(run_metadata, field) != getattr(config, field):
             raise ValueError(f"run_metadata.{field} must match config.{field}")
     if run_metadata.error is not None:

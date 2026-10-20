@@ -72,6 +72,7 @@ def simulation_inputs():
             prompt_version="reply_v2",
             updater_version=updater.version,
             max_generated_turns=config.max_generated_turns,
+            max_output_tokens=config.max_output_tokens,
             temperature=config.temperature,
             random_seed=config.random_seed,
         ),
