@@ -65,6 +65,11 @@ def filter_by_speakers(examples: list[dict], min_speakers: int, max_speakers: in
     return [ex for ex in examples if min_speakers <= count_speakers(ex["seed"]) <= max_speakers]
 
 
+# Keep openings with at least min_turns turns.
+def filter_by_opening_length(examples: list[dict], min_turns: int) -> list[dict]:
+    return [ex for ex in examples if len(ex["seed"]["opening_turns"]) >= min_turns]
+
+
 # Keep examples from the given source splits (train / val / test).
 def filter_by_split(examples: list[dict], splits: list[str]) -> list[dict]:
     return [ex for ex in examples if ex["split"] in splits]
@@ -118,11 +123,12 @@ def load_and_prepare(source: str = "cga-wiki", config: dict | None = None) -> li
     labels = read_jsonl(ROOT / config["labels_path"])
     examples = join_seeds_and_labels(seeds, labels)
 
-    # 2. Apply the split / verified / speaker filters
+    # 2. Apply the split / verified / speaker / opening-length filters
     examples = filter_by_split(examples, config["splits"])
     if config["verified_only"]: # only keep examples that were verified by an internal annotator, this means that the label was checked by a human and more reliable.
         examples = filter_verified(examples)
     examples = filter_by_speakers(examples, config["min_speakers"], config["max_speakers"])
+    examples = filter_by_opening_length(examples, config["min_opening_turns"])
 
     # 3. Drop conversations whose pair partner was filtered out
     if config["keep_pairs"]:
