@@ -68,7 +68,7 @@ NLP544-Final-Project/
 │   ├── test_simulator.py
 │   ├── test_judge_blindness.py  # judge payload has no condition, trust, or label
 │   ├── test_evaluate.py
-│   └── test_integration_mock.py # component handoffs with a test-only paired loop
+│   └── test_integration_mock.py # production simulator and component handoffs
 │
 ├── data/                        # gitignored except README describing the contents
 │   ├── raw/                     # untouched ConvoKit download
@@ -233,16 +233,15 @@ Tests use canned responses and a fake HTTP transport with a fake API key. They
 make no paid API calls. Live one-reply verification and end-to-end paired integration
 remain separate acceptance steps; mock success is not evidence of research efficacy.
 
-This branch incorporates `main` through `b4f9d11` and Prakhar's pending schema
-alignment commit `57d621d` from `prakar-run-experiment`. The latter adds required
-`RunMetadata.max_output_tokens` and expanded evaluation records; it is not yet
-merged into upstream `main`. Shadi's pending schema-integration PR #6 at `3d37c81`
-is also incorporated locally, with its conversion corrected for those records.
-No new schema definitions are duplicated locally.
-The historical result fixtures still use `trust_v1`; the component tests construct
-current `trust_v2` results and validate JSON round trips, receiver updates, judge
-blinding, and label joins without changing those shared fixtures. The test-only
-loop does not replace Aditya's simulator or Prakhar's experiment runner.
+The working changes on `arya` incorporate the production simulator from `main`
+at `b3c93b7`, including Prakhar's `max_output_tokens` metadata validation.
+Shadi's schema handoff continues through the customizable evaluation adapter.
+The integration tests now use Aditya's actual `run_simulation` with Arya's
+generator/client, Magnus's updater, and Shadi's judge/evaluator. They verify
+receiver-only updates, paired settings, judge blinding, failure handling, and
+schema round trips using offline model responses. Historical fixtures remain
+trust_v1 examples. `scripts/run_experiment.py` is still empty: experiment artifact
+persistence, metadata aggregation, and live GPT validation remain unfinished.
 
 ## Evaluation report compatibility
 

@@ -191,3 +191,19 @@ Final verification: **223 passed, 6 corpus-dependent tests skipped**; Ruff,
 for missing/non-callable callbacks after the imported PR regressed that contract;
 tests also reject invalid explicit overrides instead of falling back silently.
 No live API calls or pushes were performed.
+
+
+## Main simulator review — October 19, 2026
+
+Reviewed `main` at `b3c93b7` (PRs #7/#8) and applied its simulator and tests
+as uncommitted working changes in the isolated `arya` worktree. No changes to
+`main`, commits, or pushes. The simulator source is unchanged from `main`.
+Replaced the component tests' duplicate simulation loop with `run_simulation`;
+verified actual reply generation, dynamic/static trust, judge blindness, and
+schema conversion. Added coverage for output-token metadata mismatches and
+actual generator/rater failures preserving serializable partial results.
+
+Verification: **259 passed, 6 corpus-dependent tests skipped**. Ruff on the
+simulator and changed tests, dependency validation, and whitespace checks pass.
+The runner script is still empty; persistent artifacts and aggregated usage
+metadata remain runner work. No live API calls or corpus download performed.

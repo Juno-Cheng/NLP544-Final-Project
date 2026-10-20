@@ -102,7 +102,7 @@ code tests only when the change warrants it.
 
 ## Handoff status
 
-October 19 verification after evaluation integration: 223 tests passed and
+October 19 verification after evaluation integration: 259 tests passed and
 6 corpus-dependent tests skipped. Ruff, dependency, and whitespace checks pass.
 Earlier documentation-link and README mock-example checks also passed. Recheck relevant tests
 after changes rather than treating these counts as permanent guarantees.
@@ -110,11 +110,10 @@ after changes rather than treating these counts as permanent guarantees.
 Current branch includes Magnus’s merged trust_v2 modules, Prakhar’s pending
 schema-alignment commit `57d621d`, and Shadi’s pending PR #6 at `3d37c81`.
 The local evaluation adapter replaces PR #6’s obsolete summary construction. The generator now consumes the ten trust bands.
-Component handoff tests exercise the real modules using a test-only loop, not the
-production simulator. Historical fixtures still describe trust_v1.
+Component handoff tests now exercise the production simulator imported from
+`main` at `b3c93b7`, with the real generator, updater, judge, and evaluator. Historical fixtures still describe trust_v1.
 
 Remaining work: configure a locally held API key and exact GPT model ID; verify
-one live reply and rater behavior; integrate metadata and generation into the
-production simulator/runner; push updates and obtain review.
+one live reply and rater behavior; implement experiment-runner persistence and metadata aggregation; push updates and obtain review.
 See [Arya.md](Arya.md) for the detailed checklist. Do not mark live generation,
 full integration, or PR submission complete based on offline tests alone.

@@ -1,9 +1,4 @@
-"""Offline component handoffs; the small loop here is not the experiment runner.
-
-Use the real generator, persona initializer, updater, judge, evaluator and schemas
-with canned replies/ratings. The simulator and run_experiment entry point remain
-separate integration work owned by Aditya and Prakhar.
-"""
+"""Offline production-simulator handoffs using real components and canned model replies."""
 
 import json
 from dataclasses import replace
@@ -24,12 +19,13 @@ from src.schemas import (
     JudgeConfig,
     LabeledExample,
     RunMetadata,
+    SimulationConfig,
     SimulationResult,
-    StateSnapshot,
     UpdaterConfig,
     from_dict,
     to_dict,
 )
+from src.simulator import run_simulation
 from src.state_updater import TrustUpdater
 
 
@@ -48,14 +44,11 @@ def seed():
 
 
 def paired_components(seed):
-    """Exercise four turns per arm without implementing a production simulator."""
+    """Exercise four turns per arm through the production simulator."""
     personas = assign_personas(seed, load_persona_configs())
     config = GenerationConfig("mock", 0.3, 256, "reply_v2", 544)
     results, traces = [], {}
     for condition in ("static", "dynamic"):
-        states = initialize_personas(personas)
-        history = list(seed.opening_turns)
-        snapshots = [StateSnapshot(history[-1].turn_id, dict(states))]
         reply_client = MockLLMClient(["Please explain the edit."] * 4)
         rater_client = MockLLMClient(["0", "0.25", "0.5", "1"])
         generation_events, rating_events = [], []
@@ -65,18 +58,6 @@ def paired_components(seed):
         updater = TrustUpdater(
             rater_client, config.model_id, on_rating=rating_events.append
         )
-        for _ in range(4):
-            speaker = next(sid for sid in states if sid != history[-1].speaker_id)
-            turn = generator(history, states[speaker], config)
-            history.append(turn)
-            receiver = next(sid for sid in states if sid != speaker)
-            states[receiver] = updater(
-                states[receiver],
-                turn,
-                history,
-                UpdaterConfig(condition, updater.version),
-            ).state
-            snapshots.append(StateSnapshot(turn.turn_id, dict(states)))
         metadata = RunMetadata(
             experiment_id="component-test",
             paired_run_id=seed.conversation_id,
@@ -89,17 +70,24 @@ def paired_components(seed):
             random_seed=config.random_seed,
         )
         results.append(
-            SimulationResult(
-                run_id=f"{seed.conversation_id}-{condition}",
-                conversation_id=seed.conversation_id,
-                condition=condition,
-                transcript=history,
-                generated_turns=history[len(seed.opening_turns) :],
-                state_history=snapshots,
-                status="completed",
+            run_simulation(
+                seed,
+                personas,
+                SimulationConfig(
+                    condition,
+                    config.model_id,
+                    4,
+                    config.temperature,
+                    config.max_output_tokens,
+                    config.random_seed,
+                ),
+                generator,
+                updater,
                 run_metadata=metadata,
+                run_id=f"{seed.conversation_id}-{condition}",
             )
         )
+        assert results[-1].status == "ok", results[-1].run_metadata.error
         traces[condition] = (
             reply_client.requests,
             rater_client.requests,
