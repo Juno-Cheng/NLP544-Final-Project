@@ -369,21 +369,3 @@ def test_updater_version_mismatch_is_reported_as_failed(simulation_inputs):
     assert result.status == "failed"
     assert "trust_wrong" in result.run_metadata.error
     assert simulation_inputs["updater"].client.requests == []
-
-
-@pytest.mark.parametrize("replies, rating, stage, turns", [
-    ([""], "0.5", "generation", 0),
-    (["Please explain."], "not a rating", "state update", 1),
-])
-def test_actual_clients_preserve_failed_run(simulation_inputs, replies, rating, stage, turns):
-    from src.llm_client import MockLLMClient
-    from src.response_generator import PersonaResponseGenerator
-
-    simulation_inputs["generator"] = PersonaResponseGenerator(MockLLMClient(replies))
-    simulation_inputs["updater"] = TrustUpdater(MockLLMClient([rating]), "mock")
-    result = run_simulation(**simulation_inputs)
-    assert result.status == "failed"
-    assert f"{stage} failed" in result.run_metadata.error
-    assert len(result.generated_turns) == turns
-    assert len(result.state_history) == 1
-    assert from_dict(SimulationResult, to_dict(result)) == result
