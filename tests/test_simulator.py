@@ -350,6 +350,7 @@ def test_rejects_persona_keys_that_do_not_match_real_speakers(simulation_inputs)
 @pytest.mark.parametrize("field, value", [
     ("model_id", "another-model"),
     ("max_generated_turns", 4),
+    ("max_output_tokens", 128),
     ("temperature", 0.8),
     ("random_seed", 123),
 ])
