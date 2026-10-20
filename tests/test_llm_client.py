@@ -153,3 +153,50 @@ def test_token_limit_rejected_before_request():
         OpenAILLMClient(sdk).complete(
             "prompt", "input", replace(CONFIG, max_output_tokens=1)
         )
+
+
+@pytest.mark.parametrize("send_temperature", [True, False])
+def test_gpt_adapter_can_serve_magnus_rater_and_next_reply(send_temperature):
+    from src.persona import initialize_personas, load_persona_configs
+    from src.response_generator import PersonaResponseGenerator
+    from src.schemas import DialogueTurn, UpdaterConfig
+    from src.state_updater import TrustUpdater
+
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        body = response_body()
+        is_rating = "reader_id" in json.loads(payload["input"])
+        body["output"][0]["content"][0]["text"] = (
+            "0.0" if is_rating else "Please explain."
+        )
+        return httpx.Response(200, json=body)
+
+    with sdk_for(handler) as sdk:
+        client = OpenAILLMClient(sdk, send_temperature=send_temperature)
+        states = initialize_personas(load_persona_configs())
+        history = [
+            DialogueTurn(0, "A", "Could you explain?"),
+            DialogueTurn(1, "B", "No."),
+        ]
+        ratings, generations = [], []
+        updater = TrustUpdater(client, CONFIG.model_id, on_rating=ratings.append)
+        states["A"] = updater(
+            states["A"], history[-1], history, UpdaterConfig("dynamic", updater.version)
+        ).state
+        PersonaResponseGenerator(client, on_generation=generations.append)(
+            history,
+            states["A"],
+            replace(CONFIG, prompt_version="reply_v2"),
+        )
+    assert requests[0]["max_output_tokens"] == 16
+    assert requests[1]["max_output_tokens"] == CONFIG.max_output_tokens
+    assert json.loads(requests[1]["input"])["trust_level"]["level"] == "cautious"
+    assert json.loads(requests[1]["input"])["actor"]["trust"] == 0.5
+    assert all(("temperature" in request) == send_temperature for request in requests)
+    assert ratings[0]["prompt_version"] == "trust_update_v2"
+    assert generations[0]["prompt_version"] == "reply_v2"
+    assert ratings[0]["token_usage"]["total_tokens"] == 14
+    assert generations[0]["random_seed_applied"] is None

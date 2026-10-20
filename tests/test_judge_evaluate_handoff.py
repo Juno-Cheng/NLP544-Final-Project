@@ -1,9 +1,8 @@
 """Judge-to-evaluator integration with a fake LLM client."""
 
-from types import SimpleNamespace
-
-from src.escalation_judge import score_escalation, make_llm_judge_callable
+from src.escalation_judge import make_llm_judge_callable, score_escalation
 from src.evaluate import evaluate_conditions, to_schema_summary
+from src.llm_client import MockLLMClient
 from src.schemas import DialogueTurn, GenerationConfig, JudgeConfig
 
 
@@ -23,19 +22,14 @@ def test_mocked_judge_to_evaluation_is_blind():
         for arm in ("static", "dynamic")
     ]
 
-    class FakeClient:
-        def __init__(self):
-            self.prompts = []
-            self.replies = iter([
-                '{"score": 0.2}', '{"score": 0.9}',
-                '{"score": 0.8}', '{"score": 0.1}',
-            ])
-
-        def complete(self, instructions, payload, config):
-            self.prompts.append(payload)
-            return SimpleNamespace(text=next(self.replies))
-
-    client = FakeClient()
+    client = MockLLMClient(
+        [
+            '{"score": 0.2}',
+            '{"score": 0.9}',
+            '{"score": 0.8}',
+            '{"score": 0.1}',
+        ]
+    )
     judge = make_llm_judge_callable(
         client,
         GenerationConfig("mock-judge", 0.0, 128, "judge_rubric_v1", 544),
@@ -51,19 +45,17 @@ def test_mocked_judge_to_evaluation_is_blind():
         for run in runs
     ]
 
-    assert len(client.prompts) == 4
+    assert len(client.requests) == 4
     assert all(
-        '"real_outcome"' not in p
-        and '"condition"' not in p
-        and '"trust"' not in p
-        for p in client.prompts
+        '"real_outcome"' not in p and '"condition"' not in p and '"trust"' not in p
+        for p in (request["payload"] for request in client.requests)
     )
 
     report = evaluate_conditions(examples, runs, scores)
     summary = to_schema_summary(report)
 
     assert (
-        summary.n_paired_complete,
-        summary.auc_static,
-        summary.auc_dynamic,
+        summary.coverage.n_completed_pairs,
+        summary.metrics.roc_auc_static,
+        summary.metrics.roc_auc_dynamic,
     ) == (2, 0.0, 1.0)

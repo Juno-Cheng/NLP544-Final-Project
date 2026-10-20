@@ -41,7 +41,7 @@ generate_reply(
 - [ ] Make model/prompt identifiers, parameters, errors, token usage, and available latency/cost information accessible through an agreed handoff. Prakhar owns persistence and the run manifest; the exact metadata interface remains to be agreed.
 - [ ] Keep API keys out of source control and logs. Coordinate any required environment-variable names and dependency changes.
 
-### 3. Versioned reply prompt — `prompts/reply_v1.txt`
+### 3. Versioned reply prompt — `prompts/reply_v2.txt` (legacy `reply_v1.txt` retained)
 
 - [ ] Include the speaker's stable traits, current trust, and visible dialogue in generation input.
 - [ ] Document how trust should influence the next reply; a changing number that is only logged does not satisfy the intervention.
@@ -73,10 +73,10 @@ generate_reply(
 
 | Dependency or decision | Collaborators | Current status |
 |---|---|---|
-| `DialogueTurn`, `AgentState`, `GenerationConfig`, and `ResponseGenerator` definitions and serialization | Prakhar; Aditya for callback integration | Core fields are described, but some types/contracts are not fully defined. Do not independently invent incompatible shared schemas. |
-| Operational meaning of trust and how the prompt expresses it | Magnus + Arya | Requires agreement; trust is a modeled state, not measured human trust. |
-| Trust-update timing and seed-opening initialization | Magnus + Arya + Aditya | Receiver updates after observing a partner message is proposed; initialization must be comparable across arms. |
-| Whether both speakers update trust; fixed turn-taking and turn budget | Aditya + Arya + Magnus | Both speakers and six generated turns are proposed defaults, not confirmed decisions. |
+| `DialogueTurn`, `AgentState`, `GenerationConfig`, and `ResponseGenerator` definitions and serialization | Prakhar; Aditya for callback integration | Defined in Prakhar’s imported schemas; pending alignment commit `57d621d` is included locally. Do not duplicate shared schemas. |
+| Operational meaning of trust and how the prompt expresses it | Magnus + Arya | Magnus records modeled charity/cooperation and ten behavior bands in DECISIONS §F. `reply_v2` now consumes them; research validity remains unproven. |
+| Trust-update timing and seed-opening initialization | Magnus + Arya + Aditya | DECISIONS §F: receiver updates after each new generated message; both arms start at 0.75 after the opening, with no opening-turn updates. |
+| Whether both speakers update trust; fixed turn-taking and turn budget | Aditya + Arya + Magnus | Both receivers update in dynamic mode under DECISIONS §F. The turn budget is still supplied by the caller; six turns remains the suggested pilot budget. |
 | Suitable two-speaker seed structure | Jon; Aditya + Arya for simulation expectations | Jon validates real source data; unsuitable examples must not be silently rewritten. |
 | Model, prompt, parameter, failure, and usage-metadata handoff | Arya + Prakhar | Arya chooses runtime generation; Prakhar owns experiment configuration and saved artifacts. |
 
@@ -130,3 +130,64 @@ suite, including **31 passing generator/client tests**. The six skips require
 locally downloaded corpus data. Ruff checks on the four implemented Python files,
 `pip check`, documentation links, and the README mock example pass. No API key or
 model is configured in the shell, so no live generation was attempted.
+
+## Team-update integration — October 19, 2026
+
+Imported current main (including Magnus's merged persona/trust work) and Prakhar's
+schema-alignment branch at `57d621d` into `arya`. The owner-authored schema and
+fixture changes are preserved without additional local edits. Magnus's new
+DECISIONS §F was carried into `agents_docs/DECISIONS.md` during the merge.
+
+- [x] `reply_v2` receives current numeric trust plus `describe_trust()`'s level/behavior.
+- [x] `reply_v1` keeps its original inputs for backward-compatible experiment replay.
+- [x] All ten bands, boundary values, within-band changes, and repeated calls are tested.
+- [x] Real-name speaker mapping and fresh 0.75 starting states work with the generator.
+- [x] A test-only paired loop verifies receiver-only updates, static no-rater behavior,
+  matching generation settings, state snapshots, and later trust-conditioned replies.
+- [x] The actual SDK with a fake HTTP transport serves both generator and rater,
+  including the rater's 16-token request and explicit temperature-omission option.
+- [x] Current results round-trip through Prakhar's schemas and hand off to the
+  merged judge/evaluator without exposing trust/condition metadata to the judge.
+- [ ] Configure an exact accessible GPT model ID and verify live generation/rater behavior.
+- [ ] Wire these components into the production simulator and experiment runner.
+- [ ] Push the updated branch and obtain PR review; existing reply-generation PR is #4.
+
+The new integration tests use canned replies/ratings and synthetic labels. They
+are not a real-data experiment and do not run the production simulator. Existing
+`sample_result_*.json` files are historical trust_v1 examples, not trust_v2 traces.
+The prompt review preserves Magnus's band wording; its prescribed tone and stance
+may affect escalation measurements and must be evaluated empirically. Capture
+`configs/personas.yaml` with the experiment manifest because the prompt hash does
+not fingerprint band text. OpenAI is confirmed as provider; exact model remains
+caller-configurable. Do not interpret provider selection as model compatibility.
+
+October 19 verification: **199 passed, 6 skipped** for the full suite; **75 passed**
+for generator/client/component-handoff tests. The six skipped tests need downloaded
+corpus data; no corpus download or live API call was performed. Ruff, `pip check`,
+local documentation links, and the updated README mock example pass. Magnus's
+prompt, persona/updater modules, and configuration are preserved byte-for-byte;
+Prakhar's schemas and fixtures match the imported branch. The runtime change in
+Arya's generator is limited to adding the v2 trust-level payload.
+
+## Customizable evaluation handoff — October 19, 2026
+
+Shadi's pending PR #6 (`3d37c81`) is now merged locally into `arya`. Its three
+reproduced schema-conversion failures are fixed in the existing `src/evaluate.py`.
+`EvaluationReportAdapter` centralizes conversion; `to_schema_summary()` remains
+the caller entry point and accepts an injected adapter. Explicit validators let
+other PRs add report-only excluded-row fields without weakening default parsing.
+Native schema fields are discovered from `ExcludedPair` and never projected out.
+
+The shared schemas, fixtures, Jon's loader, and the metric calculations are
+unchanged by this compatibility fix. Completed pair information remains typed;
+excluded-row partial scores/pair IDs stay in the original detailed report, which
+must be saved alongside the summary. Unknown fields and missing required fields
+raise errors. Tests now use `summary.coverage`, `summary.metrics`, `summary.pairs`,
+and `summary.excluded`, and the judge handoff uses Arya's actual mock client.
+No additional source files or dependencies were introduced for this adapter.
+
+Final verification: **223 passed, 6 corpus-dependent tests skipped**; Ruff,
+`pip check`, and `git diff --check` pass. Restored the judge's clear `ValueError`
+for missing/non-callable callbacks after the imported PR regressed that contract;
+tests also reject invalid explicit overrides instead of falling back silently.
+No live API calls or pushes were performed.

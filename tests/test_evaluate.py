@@ -1,10 +1,13 @@
 """Unit tests for pairing, integrity, pilot coverage, and honest metrics."""
 
+import json
+from copy import deepcopy
 from dataclasses import dataclass
 
 import pytest
 
-from src.evaluate import evaluate_conditions
+from src.evaluate import EvaluationReportAdapter, evaluate_conditions, to_schema_summary
+from src.schemas import EvaluationSummary, from_dict, to_dict
 
 
 def sample():
@@ -242,12 +245,12 @@ def test_schema_summary_conversion():
     summary = to_schema_summary(report)
 
     assert isinstance(summary, EvaluationSummary)
-    assert summary.n_examples == 2
-    assert summary.n_paired_complete == 2
-    assert len(summary.rows) == 2
+    assert summary.coverage.n_examples == 2
+    assert summary.coverage.n_completed_pairs == 2
+    assert len(summary.pairs) == 2
 
-    assert summary.auc_static == 0.0
-    assert summary.auc_dynamic == 1.0
+    assert summary.metrics.roc_auc_static == 0.0
+    assert summary.metrics.roc_auc_dynamic == 1.0
 
     # Verify the result can be serialized and reconstructed.
     assert from_dict(EvaluationSummary, to_dict(summary)) == summary
@@ -263,11 +266,125 @@ def test_schema_conversion_preserves_failed_pair_details():
     scores = [s for s in scores if s["run_id"] != "attack-dynamic"]
 
     report = evaluate_conditions(examples, runs, scores, on_incomplete="report")
+    original = deepcopy(report)
     summary = to_schema_summary(report)
 
-    excluded = next(r for r in summary.rows if r.conversation_id == "attack")
-    assert excluded.pair_id == "civil"
-    assert excluded.static_score == 0.2
-    assert excluded.dynamic_score is None
+    excluded = next(r for r in summary.excluded if r.conversation_id == "attack")
+    assert excluded.static_run_id == "attack-static"
+    assert excluded.dynamic_run_id == "attack-dynamic"
+    assert excluded.reasons == ["dynamic_run_status:failed"]
+    assert report == original
+    assert report["excluded"][0]["pair_id"] == "civil"
+    assert report["excluded"][0]["static_score"] == 0.2
+    assert report["excluded"][0]["dynamic_score"] is None
     assert report["excluded"][0]["reasons"] == ["dynamic_run_status:failed"]
     assert from_dict(EvaluationSummary, to_dict(summary)) == summary
+
+
+@pytest.fixture
+def failed_report():
+    examples, runs, scores = sample()
+    runs[1]["status"] = "failed"
+    scores = [score for score in scores if score["run_id"] != runs[1]["run_id"]]
+    return evaluate_conditions(examples, runs, scores, on_incomplete="report")
+
+
+def test_adapter_accepts_current_schema_only_report(failed_report):
+    for row in failed_report["excluded"]:
+        for name in ("pair_id", "static_score", "dynamic_score"):
+            row.pop(name)
+    expected = from_dict(EvaluationSummary, failed_report)
+    assert to_schema_summary(failed_report) == expected
+
+
+def test_adapter_preserves_completed_pair_id_and_all_metrics():
+    examples, runs, scores = sample()
+    examples[0]["pair_id"] = "civil"
+    report = evaluate_conditions(examples, runs, scores)
+    summary = to_schema_summary(report)
+    assert summary.pairs[0].pair_id == "civil"
+    assert to_dict(summary.metrics) == report["metrics"]
+    assert summary.pairs[0].score_delta == pytest.approx(0.7)
+    assert summary.unverified_pair_settings == report["unverified_pair_settings"]
+
+
+def test_adapter_empty_report_and_json_roundtrip():
+    report = evaluate_conditions([], [], [], on_incomplete="report")
+    summary = to_schema_summary(report)
+    assert summary.coverage.n_examples == 0
+    assert summary.metrics.roc_auc_static is None
+    assert (
+        from_dict(EvaluationSummary, json.loads(json.dumps(to_dict(summary))))
+        == summary
+    )
+
+
+@pytest.mark.parametrize("field", ["pair_id", "static_score", "dynamic_score"])
+def test_adapter_validates_details_before_projecting(failed_report, field):
+    failed_report["excluded"][0][field] = True
+    original = deepcopy(failed_report)
+    with pytest.raises(ValueError):
+        to_schema_summary(failed_report)
+    assert failed_report == original
+
+
+@pytest.mark.parametrize("location", ["root", "excluded", "pairs", "metrics"])
+def test_adapter_rejects_unrecognized_fields(failed_report, location):
+    target = failed_report if location == "root" else failed_report[location]
+    if isinstance(target, list):
+        target = target[0]
+    target["unreviewed_field"] = "must not be silently lost"
+    with pytest.raises(ValueError, match="unexpected fields"):
+        to_schema_summary(failed_report)
+
+
+def test_adapter_requires_schema_fields_and_consistent_counts(failed_report):
+    broken = deepcopy(failed_report)
+    del broken["pairs"][0]["score_delta"]
+    with pytest.raises(ValueError, match="score_delta"):
+        to_schema_summary(broken)
+    broken = deepcopy(failed_report)
+    broken["coverage"]["n_excluded"] = 0
+    with pytest.raises(ValueError, match="n_excluded"):
+        to_schema_summary(broken)
+
+
+def test_custom_detail_validator_is_injected_without_global_changes(failed_report):
+    def validate_review_note(value):
+        if not isinstance(value, str):
+            raise TypeError("review_note must be a string")
+
+    failed_report["excluded"][0]["review_note"] = "Retry next pilot"
+    adapter = EvaluationReportAdapter(
+        excluded_detail_validators={"review_note": validate_review_note}
+    )
+    original = deepcopy(failed_report)
+    summary = to_schema_summary(failed_report, adapter=adapter)
+    assert summary.coverage.n_excluded == 1
+    assert failed_report == original
+    with pytest.raises(ValueError, match="unexpected fields"):
+        to_schema_summary(failed_report)
+    failed_report["excluded"][0]["review_note"] = 123
+    with pytest.raises(TypeError, match="review_note"):
+        to_schema_summary(failed_report, adapter=adapter)
+
+
+def test_adapter_cannot_drop_required_schema_fields():
+    with pytest.raises(ValueError, match="schema fields"):
+        EvaluationReportAdapter(
+            excluded_detail_validators={"reasons": lambda value: None}
+        )
+
+
+@pytest.mark.parametrize("validators", [{"note": None}, {"": lambda value: None}])
+def test_adapter_rejects_invalid_configuration(validators):
+    with pytest.raises(ValueError, match="validators"):
+        EvaluationReportAdapter(excluded_detail_validators=validators)
+
+
+def test_adapter_detaches_typed_summary_from_report(failed_report):
+    summary = to_schema_summary(failed_report)
+    summary.notes.append("local annotation")
+    summary.excluded[0].reasons.append("local reason")
+    assert "local annotation" not in failed_report["notes"]
+    assert "local reason" not in failed_report["excluded"][0]["reasons"]

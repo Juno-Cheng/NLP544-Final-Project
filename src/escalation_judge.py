@@ -55,6 +55,8 @@ def score_escalation(run_id, transcript, config, *, judge_callable=None):
     judge = (
         judge_callable if judge_callable is not None else config.get("judge_callable")
     )
+    if not callable(judge):
+        raise ValueError("judge_callable must be callable")  # noqa: TRY004 - preserve public validation contract
     model_id = config["judge_model_id"]
     rubric_version = config["rubric_version"]
     rubric_path = Path(config.get("rubric_path", "prompts/judge_rubric_v1.txt"))
@@ -70,11 +72,11 @@ def score_escalation(run_id, transcript, config, *, judge_callable=None):
         except json.JSONDecodeError as exc:
             raise ValueError("Judge returned invalid JSON") from exc
     if not isinstance(response, Mapping):
-        raise ValueError("Judge response must be a JSON object")
+        raise ValueError("Judge response must be a JSON object")  # noqa: TRY004 - preserve public validation contract
 
     score = response.get("score")
     if isinstance(score, bool) or not isinstance(score, (int, float)):
-        raise ValueError("Judge score must be numeric")
+        raise ValueError("Judge score must be numeric")  # noqa: TRY004 - preserve public validation contract
     score = float(score)
     if not math.isfinite(score) or not 0 <= score <= 1:
         raise ValueError("Judge score must be finite and between 0 and 1")

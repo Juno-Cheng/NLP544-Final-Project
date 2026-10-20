@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from src.llm_client import GenerationError, MockLLMClient
+from src.persona import describe_trust
 from src.response_generator import PersonaResponseGenerator
 from src.schemas import (
     AgentState,
@@ -24,9 +25,9 @@ def history():
     return from_dict(ConversationSeed, json.loads(path.read_text())).opening_turns
 
 
-@pytest.fixture
-def config():
-    return GenerationConfig("mock", 0.3, 256, "reply_v1", 544)
+@pytest.fixture(params=["reply_v1", "reply_v2"])
+def config(request):
+    return GenerationConfig("mock", 0.3, 256, request.param, 544)
 
 
 @pytest.mark.parametrize("speaker", ["A", "B"])
@@ -46,7 +47,11 @@ def test_reply_uses_actor_and_next_turn_id(history, config, speaker):
     assert [turn["text"] for turn in payload["history"]] == [
         turn.text for turn in history
     ]
-    assert set(payload) == {"actor", "history"}
+    expected_keys = {"actor", "history"}
+    if config.prompt_version == "reply_v2":
+        expected_keys.add("trust_level")
+        assert payload["trust_level"] == describe_trust(actor.trust)
+    assert set(payload) == expected_keys
 
 
 def test_updated_trust_reaches_later_reply_without_mutation(history, config):
@@ -82,6 +87,7 @@ def test_metadata_callback_is_separate_from_dialogue(history, config):
     assert len(events[0]["prompt_sha256"]) == 64
     assert "history" not in events[0]
     assert "trust" not in events[0]
+    assert "trust_level" not in events[0]
 
 
 @pytest.mark.parametrize("text", ["", " \n ", None])
@@ -150,3 +156,61 @@ def test_mock_exhaustion_propagates(history, config):
         PersonaResponseGenerator(MockLLMClient([]))(
             history, AgentState("A", 0.7, {}), config
         )
+
+
+@pytest.mark.parametrize(
+    ("trust", "level"),
+    [
+        (0.0, "accusatory"),
+        (0.099999, "accusatory"),
+        (0.1, "adversarial"),
+        (0.2, "distrustful"),
+        (0.3, "skeptical"),
+        (0.4, "wary"),
+        (0.5, "cautious"),
+        (0.6, "reserved"),
+        (0.7, "open"),
+        (0.75, "open"),
+        (0.8, "cordial"),
+        (0.9, "trusting"),
+        (1.0, "trusting"),
+    ],
+)
+def test_v2_passes_all_trust_bands_and_numeric_value(history, trust, level):
+    client = MockLLMClient(["A reply"])
+    config = GenerationConfig("mock", 0.3, 256, "reply_v2", 544)
+    PersonaResponseGenerator(client)(history, AgentState("A", trust, {}), config)
+    payload = json.loads(client.requests[0]["payload"])
+    assert payload["actor"]["trust"] == trust
+    assert payload["trust_level"]["level"] == level
+    assert payload["trust_level"]["behavior"] == describe_trust(trust)["behavior"]
+    assert "trust_level.behavior" in client.requests[0]["instructions"]
+
+
+def test_v1_does_not_load_trust_bands(history, monkeypatch):
+    def unexpected_lookup(*args):
+        pytest.fail("Legacy v1 must not depend on the v2 band configuration")
+
+    monkeypatch.setattr("src.response_generator.describe_trust", unexpected_lookup)
+    client = MockLLMClient(["Reply"])
+    PersonaResponseGenerator(client)(
+        history,
+        AgentState("A", 0.75, {}),
+        GenerationConfig("mock", 0.3, 256, "reply_v1", 544),
+    )
+    assert set(json.loads(client.requests[0]["payload"])) == {"actor", "history"}
+
+
+def test_v2_recomputes_band_on_each_call_and_keeps_within_band_changes(history):
+    client = MockLLMClient(["Reply"] * 3)
+    generator = PersonaResponseGenerator(client)
+    config = GenerationConfig("mock", 0.3, 256, "reply_v2", 544)
+    for trust in (0.75, 0.71, 0.5):
+        generator(history, AgentState("A", trust, {}), config)
+    payloads = [json.loads(request["payload"]) for request in client.requests]
+    assert [payload["trust_level"]["level"] for payload in payloads] == [
+        "open",
+        "open",
+        "cautious",
+    ]
+    assert [payload["actor"]["trust"] for payload in payloads] == [0.75, 0.71, 0.5]

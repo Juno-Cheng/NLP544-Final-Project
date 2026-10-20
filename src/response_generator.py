@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.llm_client import GenerationError, LLMClient
+from src.persona import describe_trust
 from src.schemas import AgentState, DialogueTurn, GenerationConfig, from_dict, to_dict
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
@@ -71,14 +72,14 @@ class PersonaResponseGenerator:
         instructions = prompt_path.read_text(encoding="utf-8")
         if not instructions.strip():
             raise ValueError("reply prompt is empty")
-        payload = json.dumps(
-            {
-                "actor": to_dict(actor),
-                "history": [to_dict(turn) for turn in turns],
-            },
-            ensure_ascii=False,
-            allow_nan=False,
-        )
+        payload_data = {
+            "actor": to_dict(actor),
+            "history": [to_dict(turn) for turn in turns],
+        }
+        # Keep v1's experimental inputs unchanged for reproducible older runs.
+        if config.prompt_version == "reply_v2":
+            payload_data["trust_level"] = describe_trust(actor.trust)
+        payload = json.dumps(payload_data, ensure_ascii=False, allow_nan=False)
         completion = self._client.complete(instructions, payload, config)
         if not isinstance(completion.text, str) or not completion.text.strip():
             raise GenerationError("Model returned an empty or non-text reply")

@@ -33,7 +33,7 @@ confirmed requirements; examples are not evidence of implementation or results.
 
 Arya owns [the model client](../src/llm_client.py),
 [reply generation](../src/response_generator.py), and
-[the reply prompt](../prompts/reply_v1.txt).
+[the current reply prompt](../prompts/reply_v2.txt).
 Aditya owns simulation, Magnus persona/trust updates, Jon data preparation,
 Prakhar shared schemas and experiment integration, and Shadi judging/evaluation.
 Coordinate changes to another owner's modules. Shared schema and fixture changes
@@ -52,6 +52,10 @@ need the integration owner's approval under the repository workflow.
   The simulator appends turns and calls the updater; the generator does neither.
 - Keep usage metadata separate from dialogue through the optional per-run callback.
   The runner is responsible for saving metadata and failed-run records.
+- Route evaluation reports through `to_schema_summary(report)` in `src/evaluate.py`.
+  Inject `EvaluationReportAdapter` validators for explicit report-only excluded-row
+  details; never relax shared schema validation or silently filter unknown fields.
+  Save both the untouched detailed report and typed summary to retain partial scores.
 - Use type hints, clear errors, and concise docstrings. Extend existing files when
   practical; add files only when they have a clear purpose.
 
@@ -67,8 +71,9 @@ need the integration owner's approval under the repository workflow.
   trust values, provenance, or reference labels. Join labels after scoring.
 - The current Responses adapter records requested seed but does not apply it.
   Temperature omission is explicit and recorded; keep it identical across arms.
-- Prompt trust semantics, initialization, and turn-budget proposals require team
-  agreement. A mock or small smoke test does not establish predictive superiority.
+- Current trust semantics and 0.75 post-opening initialization are recorded in
+  DECISIONS §F. Use `reply_v2` plus the configured trust bands for the current pilot;
+  preserve `reply_v1` behavior for old experiments. Turn budgets remain caller settings. A mock or small smoke test does not establish predictive superiority.
 
 ## Environment and verification
 
@@ -77,7 +82,7 @@ Run commands from the repository root. Use the existing Python 3.13 environment:
 ```bash
 source .venv/bin/activate
 python --version
-python -m pytest tests/test_response_generator.py tests/test_llm_client.py -q --basetemp=.venv/test-tmp
+python -m pytest tests/test_response_generator.py tests/test_llm_client.py tests/test_integration_mock.py -q --basetemp=.venv/test-tmp
 ```
 
 For broader integration checks, keep library caches inside the repository:
@@ -85,7 +90,7 @@ For broader integration checks, keep library caches inside the repository:
 ```bash
 MPLCONFIGDIR="$PWD/.venv/matplotlib" XDG_CACHE_HOME="$PWD/.venv/cache" HF_HOME="$PWD/.venv/huggingface" HF_HUB_OFFLINE=1 python -m pytest -q --basetemp=.venv/test-tmp
 python -m pip --no-cache-dir check
-ruff check src/llm_client.py src/response_generator.py tests/test_llm_client.py tests/test_response_generator.py --no-cache
+ruff check src/llm_client.py src/response_generator.py tests/test_llm_client.py tests/test_response_generator.py tests/test_integration_mock.py --no-cache
 git diff --check
 ```
 
@@ -97,12 +102,19 @@ code tests only when the change warrants it.
 
 ## Handoff status
 
-At the last implementation verification: 86 tests passed and 6 corpus-dependent
-tests skipped, including 31 passing generator/client tests. Recheck relevant tests
+October 19 verification after evaluation integration: 223 tests passed and
+6 corpus-dependent tests skipped. Ruff, dependency, and whitespace checks pass.
+Earlier documentation-link and README mock-example checks also passed. Recheck relevant tests
 after changes rather than treating these counts as permanent guarantees.
 
-Remaining work: configure a locally held API key and accessible GPT model; verify
-one live reply; confirm trust wording and turn-ID convention with the owners;
-integrate metadata and generation into a complete paired experiment; obtain review.
+Current branch includes Magnus’s merged trust_v2 modules, Prakhar’s pending
+schema-alignment commit `57d621d`, and Shadi’s pending PR #6 at `3d37c81`.
+The local evaluation adapter replaces PR #6’s obsolete summary construction. The generator now consumes the ten trust bands.
+Component handoff tests exercise the real modules using a test-only loop, not the
+production simulator. Historical fixtures still describe trust_v1.
+
+Remaining work: configure a locally held API key and exact GPT model ID; verify
+one live reply and rater behavior; integrate metadata and generation into the
+production simulator/runner; push updates and obtain review.
 See [Arya.md](Arya.md) for the detailed checklist. Do not mark live generation,
 full integration, or PR submission complete based on offline tests alone.

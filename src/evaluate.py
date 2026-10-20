@@ -1,7 +1,7 @@
 """Condition-paired evaluation of simulated conversations against held-out labels.
 
-The dict output is provisional until the integration owner finalizes
-``EvaluationSummary`` in ``schemas.py``.
+Keep the detailed dict report for audit records. Convert it to the shared
+``EvaluationSummary`` through ``to_schema_summary`` at the integration boundary.
 
 By default invalid or incomplete experiments raise a ValueError, preserving the
 original fail-fast interface.  Use ``on_incomplete="report"`` for exploratory
@@ -11,7 +11,12 @@ for in ``excluded`` and ``coverage``. Structural corruption always raises.
 
 import math
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from copy import deepcopy
+from dataclasses import fields
+from typing import Any
+
+from src.schemas import EvaluationSummary, ExcludedPair, from_dict
 
 # These settings should match across arms, if recorded. The actual generated
 # text, condition, trust history, run_id, latency, and token usage may differ.
@@ -38,7 +43,7 @@ def _record(value):
 
 def _score(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("Judge score must be a number")
+        raise ValueError("Judge score must be a number")  # noqa: TRY004 - preserve public validation contract
     value = float(value)
     if not math.isfinite(value) or not 0 <= value <= 1:
         raise ValueError("Judge score must be finite and in [0, 1]")
@@ -316,29 +321,68 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
     }
 
 
-def to_schema_summary(report):
-    """Convert to shared schema; save the detailed report separately."""
-    from src.schemas import EvaluationSummary, PairedComparison
+def _optional_pair_id(value: Any) -> None:
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ValueError("report-only pair_id must be a nonempty string or null")
 
-    def convert_row(row, status):
-        return PairedComparison(
-            conversation_id=row["conversation_id"],
-            real_outcome=row["real_outcome"],
-            static_run_id=row.get("static_run_id"),
-            dynamic_run_id=row.get("dynamic_run_id"),
-            static_score=row.get("static_score"),
-            dynamic_score=row.get("dynamic_score"),
-            status=status,
-            pair_id=row.get("pair_id"),
-        )
 
-    rows = [convert_row(row, row["status"]) for row in report["pairs"]]
-    rows.extend(convert_row(row, "excluded") for row in report["excluded"])
+def _optional_score(value: Any) -> None:
+    if value is not None:
+        _score(value)
 
-    return EvaluationSummary(
-        n_examples=report["coverage"]["n_examples"],
-        n_paired_complete=report["coverage"]["n_completed_pairs"],
-        rows=rows,
-        auc_static=report["metrics"]["roc_auc_static"],
-        auc_dynamic=report["metrics"]["roc_auc_dynamic"],
-    )
+
+class EvaluationReportAdapter:
+    """Project a detailed report into shared schemas without mutating the report.
+
+    Only explicitly registered, validated excluded-row details may remain outside
+    the typed summary. Persist the original report too, so those details are kept.
+    New schema-native fields pass directly to from_dict instead of being removed.
+    """
+
+    def __init__(
+        self,
+        *,
+        excluded_detail_validators: Mapping[str, Callable[[Any], None]] | None = None,
+    ) -> None:
+        self._excluded_fields = frozenset(field.name for field in fields(ExcludedPair))
+        custom = dict(excluded_detail_validators or {})
+        if self._excluded_fields.intersection(custom):
+            raise ValueError("Cannot register schema fields as report-only details")
+        if any(
+            not isinstance(name, str) or not name.strip() or not callable(validator)
+            for name, validator in custom.items()
+        ):
+            raise ValueError(
+                "Detail validators require nonempty field names and callable validators"
+            )
+        self._detail_validators = {
+            "pair_id": _optional_pair_id,
+            "static_score": _optional_score,
+            "dynamic_score": _optional_score,
+            **custom,
+        }
+
+    def to_summary(self, report: Mapping[str, Any]) -> EvaluationSummary:
+        """Return a validated summary; unknown fields and missing data remain errors."""
+        if not isinstance(report, Mapping):
+            raise TypeError("evaluation report must be a mapping")
+        payload = deepcopy(dict(report))
+        excluded = payload.get("excluded")
+        if isinstance(excluded, list):
+            for row in excluded:
+                if not isinstance(row, dict):
+                    continue  # from_dict supplies the schema-path validation error.
+                for name, validate in self._detail_validators.items():
+                    if name in row and name not in self._excluded_fields:
+                        validate(row.pop(name))
+        return from_dict(EvaluationSummary, payload)
+
+
+def to_schema_summary(
+    report: Mapping[str, Any],
+    *,
+    adapter: EvaluationReportAdapter | None = None,
+) -> EvaluationSummary:
+    """Stable entry point for runners; inject an adapter for explicit PR-specific details."""
+    converter = EvaluationReportAdapter() if adapter is None else adapter
+    return converter.to_summary(report)

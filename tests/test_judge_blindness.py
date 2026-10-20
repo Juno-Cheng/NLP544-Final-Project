@@ -158,3 +158,19 @@ def test_shared_llm_client_adapter():
     assert '"condition"' not in client.payloads[0]
     assert '"real_outcome"' not in client.payloads[0]
     assert '"trust"' not in client.payloads[0]
+
+
+@pytest.mark.parametrize("invalid_callback", [False, "invalid", 123])
+def test_invalid_explicit_callback_does_not_fall_back(invalid_callback):
+    config = {
+        "judge_model_id": "mock",
+        "rubric_version": "v1",
+        "judge_callable": lambda _: pytest.fail("Must not use fallback callback"),
+    }
+    with pytest.raises(ValueError, match="judge_callable"):
+        score_escalation(
+            "run-1",
+            [{"speaker_id": "A", "text": "hi"}],
+            config,
+            judge_callable=invalid_callback,
+        )

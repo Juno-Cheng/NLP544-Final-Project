@@ -19,7 +19,8 @@ NLP544-Final-Project/
 ├── agents_docs/                 # project requirements and planning
 │   ├── SPEC.md                  # technical specification; provisional choices noted
 │   ├── DECISIONS.md             # team decisions, open questions, implementation guide
-│   └── Arya.md                  # Arya’s October 16–17 requirements and guardrails
+│   ├── Arya.md                  # Arya’s requirements and implementation status
+│   └── AGENTS.md                # working guardrails and verification commands
 ├── requirements.txt
 ├── .env.example                 # API key variable names only; real .env is gitignored
 ├── .gitignore                   # ignores .env, data/raw, data/processed, outputs/
@@ -33,7 +34,7 @@ NLP544-Final-Project/
 │
 ├── prompts/                     # versioned text, so prompt changes show up in diffs
 │   ├── reply_v1.txt             # persona + trust-conditioned reply prompt (Arya)
-│   ├── reply_v2.txt             # reply_v1 plus the 10 trust levels (Magnus, pending Arya review)
+│   ├── reply_v2.txt             # current prompt with Magnus’s 10 trust levels
 │   ├── trust_update_v2.txt      # LLM rater prompt for the dynamic updater (Magnus)
 │   └── judge_rubric_v1.txt      # blind rubric (Shadi)
 │
@@ -67,7 +68,7 @@ NLP544-Final-Project/
 │   ├── test_simulator.py
 │   ├── test_judge_blindness.py  # judge payload has no condition, trust, or label
 │   ├── test_evaluate.py
-│   └── test_integration_mock.py # full paired run with mock client
+│   └── test_integration_mock.py # component handoffs with a test-only paired loop
 │
 ├── data/                        # gitignored except README describing the contents
 │   ├── raw/                     # untouched ConvoKit download
@@ -100,7 +101,7 @@ NLP544-Final-Project/
 | `response_generator.py`, `llm_client.py` | Arya |
 | `persona.py`, `state_updater.py` | Magnus |
 | `data_loader.py`, data scripts | Jon |
-| `schemas.py`, `run_experiment.py`, tests | Jon or Prakar (TBD) |
+| `schemas.py`, `run_experiment.py`, integration tests | Prakhar |
 | `escalation_judge.py`, `evaluate.py` | Shadi |
 
 ## Setup
@@ -147,17 +148,21 @@ import json
 from pathlib import Path
 from src.llm_client import MockLLMClient
 from src.response_generator import PersonaResponseGenerator
-from src.schemas import AgentState, ConversationSeed, GenerationConfig, from_dict
+from src.persona import assign_personas, initialize_personas, load_persona_configs
+from src.schemas import ConversationSeed, GenerationConfig, from_dict
 
 seed = from_dict(ConversationSeed, json.loads(
     Path("tests/fixtures/sample_seed.json").read_text(encoding="utf-8")))
-config = GenerationConfig("mock", 0.3, 256, "reply_v1", 544)
+personas = assign_personas(seed, load_persona_configs())
+states = initialize_personas(personas)
+speaker = next(sid for sid in states if sid != seed.opening_turns[-1].speaker_id)
+config = GenerationConfig("mock", 0.3, 256, "reply_v2", 544)
 events = []  # In the runner, bind this callback to the current run's metadata collector.
 generator = PersonaResponseGenerator(
     MockLLMClient(["Could you explain what made it irrelevant?"]),
     on_generation=events.append,
 )
-reply = generator(seed.opening_turns, AgentState("A", 0.7, {"role": "editor"}), config)
+reply = generator(seed.opening_turns, states[speaker], config)
 print(reply)
 ```
 
@@ -169,10 +174,11 @@ import os
 from openai import OpenAI
 from src.llm_client import OpenAILLMClient
 
-config = GenerationConfig(os.environ["OPENAI_MODEL"], 0.3, 256, "reply_v1", 544)
+config = GenerationConfig(os.environ["OPENAI_MODEL"], 0.3, 256, "reply_v2", 544)
+states = initialize_personas(personas)  # Fresh state for this run.
 with OpenAI(timeout=30.0, max_retries=2) as sdk:
     generator = PersonaResponseGenerator(OpenAILLMClient(sdk), on_generation=events.append)
-    reply = generator(seed.opening_turns, AgentState("A", 0.7, {"role": "editor"}), config)
+    reply = generator(seed.opening_turns, states[speaker], config)
     print(reply.text)
 ```
 
@@ -193,8 +199,25 @@ The experiment owner still needs to wire these events into `RunMetadata`.
 
 The generator requires an ordered, nonempty two-speaker history and returns
 `last_turn_id + 1`. It never appends the reply to the caller's history or updates
-trust; the simulator does that. Turn-ID allocation and the proposed trust wording
-in `reply_v1.txt` should be confirmed with Aditya and Magnus before the live pilot.
+trust; the simulator does that. With `reply_v2`, the payload includes
+`trust_level = describe_trust(actor.trust)`: the named band and behavior from
+`configs/personas.yaml`, recomputed for each reply. Numeric trust remains present
+so within-band changes are not lost. `reply_v1` keeps its original payload without
+trust levels for older experiments; use `reply_v2` for the current pilot.
+
+Magnus's [recorded decisions](agents_docs/DECISIONS.md) initialize both arms at
+0.75 after the opening. Only the receiver updates after a newly generated turn;
+`trust_v2` applies `clamp(trust + 0.5 * (rating - 0.5))`. Static mode never calls
+the rater. Both clients implement the same `complete()` interface, so the injected
+`OpenAILLMClient` or `MockLLMClient` also works with `TrustUpdater`.
+The rater currently requests 16 output tokens at temperature 0; live suitability
+must be checked for the chosen model. Do not silently alter those settings.
+
+The band wording was reviewed and preserved as Magnus's implementation decision.
+It prescribes tone/cooperation and may influence measured escalation; that is a
+research limitation to assess, not evidence that the trust model is validated.
+Save the persona/band configuration alongside prompt versions in experiment
+manifests: behavior text lives in YAML and is not covered by the prompt-file hash.
 Incomplete, refused, blank, and failed responses raise `GenerationError`; the
 runner must record failed runs. No raw provider error body is included in our
 exception message. SDK retries are bounded by the caller's `max_retries`.
@@ -202,13 +225,75 @@ exception message. SDK retries are bounded by the caller's `max_retries`.
 Run the offline tests (temporary test files stay inside the project):
 
 ```bash
-python -m pytest tests/test_response_generator.py tests/test_llm_client.py -q --basetemp=.venv/test-tmp
+python -m pytest tests/test_response_generator.py tests/test_llm_client.py tests/test_integration_mock.py -q --basetemp=.venv/test-tmp
 python -m pytest -q --basetemp=.venv/test-tmp
 ```
 
 Tests use canned responses and a fake HTTP transport with a fake API key. They
 make no paid API calls. Live one-reply verification and end-to-end paired integration
 remain separate acceptance steps; mock success is not evidence of research efficacy.
+
+This branch incorporates `main` through `b4f9d11` and Prakhar's pending schema
+alignment commit `57d621d` from `prakar-run-experiment`. The latter adds required
+`RunMetadata.max_output_tokens` and expanded evaluation records; it is not yet
+merged into upstream `main`. Shadi's pending schema-integration PR #6 at `3d37c81`
+is also incorporated locally, with its conversion corrected for those records.
+No new schema definitions are duplicated locally.
+The historical result fixtures still use `trust_v1`; the component tests construct
+current `trust_v2` results and validate JSON round trips, receiver updates, judge
+blinding, and label joins without changing those shared fixtures. The test-only
+loop does not replace Aditya's simulator or Prakhar's experiment runner.
+
+## Evaluation report compatibility
+
+Use `to_schema_summary(report)` from `src/evaluate.py` at the runner boundary,
+rather than constructing schema fields in multiple modules. It delegates to
+`EvaluationReportAdapter` and validates through the shared `from_dict` parser.
+The report builder and metrics calculations are unchanged.
+
+```python
+from src.evaluate import evaluate_conditions, to_schema_summary
+from src.schemas import to_dict
+
+report = evaluate_conditions(examples, runs, scores, on_incomplete="report")
+summary = to_schema_summary(report)
+summary_json = to_dict(summary)
+# Persist BOTH report and summary_json in the experiment artifacts.
+```
+
+Completed pairs retain `pair_id`, scores, and score deltas. For excluded pairs,
+Prakhar's current schema stores IDs, labels, and exclusion reasons; Shadi's
+additional `pair_id`, `static_score`, and `dynamic_score` remain in the unchanged
+detailed report. The adapter validates those details before projecting them out
+of the typed summary. It does not silently discard arbitrary fields or invent
+missing scores/counts. Read completed counts via `summary.coverage`, metrics via
+`summary.metrics`, and rows via `summary.pairs` / `summary.excluded`.
+
+To accommodate a future PR's report-only excluded-row field, register a validator
+on an adapter instance; this leaves default behavior and other callers unchanged:
+
+```python
+from src.evaluate import EvaluationReportAdapter
+
+
+def validate_review_note(value):
+    if not isinstance(value, str):
+        raise TypeError("review_note must be a string")
+
+
+adapter = EvaluationReportAdapter(
+    excluded_detail_validators={"review_note": validate_review_note},
+)
+summary = to_schema_summary(report, adapter=adapter)
+```
+
+Required schema fields cannot be registered as report-only. If an owner adds a
+previously report-only field to `ExcludedPair`, the adapter passes it through to
+the shared parser automatically. Renames, new required fields, and other contract
+changes still need explicit integration and tests; they should fail visibly.
+Keep conversion tests in `tests/test_evaluate.py` and judge handoff tests in
+`tests/test_judge_evaluate_handoff.py`. When reconciling later PRs, retain this
+adapter entry point instead of reintroducing the obsolete summary constructor.
 
 ## Workflow
 
