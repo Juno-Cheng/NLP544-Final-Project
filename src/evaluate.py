@@ -106,10 +106,14 @@ def _pair_settings(run):
 def _check_pair_settings(static_run, dynamic_run):
     static = _pair_settings(static_run)
     dynamic = _pair_settings(dynamic_run)
-    mismatched = [key for key in PAIR_SETTING_KEYS
-                  if key in static and key in dynamic and static[key] != dynamic[key]]
-    unverified = [key for key in PAIR_SETTING_KEYS
-                  if key not in static or key not in dynamic]
+    mismatched = [
+        key
+        for key in PAIR_SETTING_KEYS
+        if key in static and key in dynamic and static[key] != dynamic[key]
+    ]
+    unverified = [
+        key for key in PAIR_SETTING_KEYS if key not in static or key not in dynamic
+    ]
     return mismatched, unverified
 
 
@@ -134,7 +138,10 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
         cid = _record(example["seed"])["conversation_id"]
         if cid in examples_by_id:
             raise ValueError(f"Duplicate example: {cid}")
-        if type(example["real_outcome"]) is not int or example["real_outcome"] not in (0, 1):
+        if type(example["real_outcome"]) is not int or example["real_outcome"] not in (
+            0,
+            1,
+        ):
             raise ValueError(f"Invalid human label: {cid}")
         examples_by_id[cid] = example
 
@@ -184,7 +191,9 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
 
         unverified = []
         if set(arms) == {"static", "dynamic"}:
-            mismatched, unverified = _check_pair_settings(arms["static"], arms["dynamic"])
+            mismatched, unverified = _check_pair_settings(
+                arms["static"], arms["dynamic"]
+            )
             for key in mismatched:
                 reasons.append(f"mismatched_setting:{key}")
 
@@ -193,33 +202,47 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
                 if any(r.startswith("missing_judge_score:") for r in reasons):
                     raise ValueError(f"Missing judge score for {cid}: {reasons}")
                 if any("run_status:" in r for r in reasons):
-                    raise ValueError(f"Failed or incomplete run cannot be evaluated for {cid}: {reasons}")
+                    raise ValueError(
+                        f"Failed or incomplete run cannot be evaluated for {cid}: {reasons}"
+                    )
                 if any(r.startswith("mismatched_setting:") for r in reasons):
                     raise ValueError(f"Mismatched paired settings for {cid}: {reasons}")
                 raise ValueError(f"Incomplete static/dynamic pair for {cid}: {reasons}")
-            excluded.append({
-                "conversation_id": cid,
-                "real_outcome": example["real_outcome"],
-                "static_run_id": arms.get("static", {}).get("run_id"),
-                "dynamic_run_id": arms.get("dynamic", {}).get("run_id"),
-                "reasons": reasons,
-            })
+            excluded.append(
+                {
+                    "conversation_id": cid,
+                    "real_outcome": example["real_outcome"],
+                    "static_run_id": arms.get("static", {}).get("run_id"),
+                    "dynamic_run_id": arms.get("dynamic", {}).get("run_id"),
+                    "reasons": reasons,
+                }
+            )
             continue
 
         static_run, dynamic_run = arms["static"], arms["dynamic"]
         static_score = scores_by_run[static_run["run_id"]]
         dynamic_score = scores_by_run[dynamic_run["run_id"]]
-        paired.append({
-            "conversation_id": cid,
-            "real_outcome": example["real_outcome"],
-            "static_run_id": static_run["run_id"],
-            "dynamic_run_id": dynamic_run["run_id"],
-            "static_score": static_score,
-            "dynamic_score": dynamic_score,
-            "score_delta": dynamic_score - static_score,
-            "status": "paired_complete",
-            "unverified_pair_settings": unverified,
-        })
+        paired.append(
+            {
+                "conversation_id": cid,
+                "real_outcome": example["real_outcome"],
+                "static_run_id": static_run["run_id"],
+                "dynamic_run_id": dynamic_run["run_id"],
+                "static_score": static_score,
+                "dynamic_score": dynamic_score,
+                "score_delta": dynamic_score - static_score,
+                "status": "paired_complete",
+                "unverified_pair_settings": unverified,
+            }
+        )
+
+    # Preserve pair_id and partial scores in evaluation report rows.
+    for row in paired:
+        row["pair_id"] = examples_by_id[row["conversation_id"]].get("pair_id")
+    for row in excluded:
+        row["pair_id"] = examples_by_id[row["conversation_id"]].get("pair_id")
+        row["static_score"] = scores_by_run.get(row.get("static_run_id"))
+        row["dynamic_score"] = scores_by_run.get(row.get("dynamic_run_id"))
 
     labels = [row["real_outcome"] for row in paired]
     static_scores = [row["static_score"] for row in paired]
@@ -229,18 +252,26 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
     rho_static = _spearman(labels, static_scores)
     rho_dynamic = _spearman(labels, dynamic_scores)
 
-    all_unverified = sorted({key for row in paired for key in row["unverified_pair_settings"]})
+    all_unverified = sorted(
+        {key for row in paired for key in row["unverified_pair_settings"]}
+    )
     notes = []
     if excluded:
-        notes.append("Metrics exclude the explicitly listed incomplete or incomparable pairs.")
+        notes.append(
+            "Metrics exclude the explicitly listed incomplete or incomparable pairs."
+        )
     if len(paired) < 20:
         notes.append("Small pilot: descriptive metrics only; no significance claim.")
     if auc_static is None or auc_dynamic is None:
-        notes.append("ROC-AUC undefined unless evaluated pairs contain both outcome labels.")
+        notes.append(
+            "ROC-AUC undefined unless evaluated pairs contain both outcome labels."
+        )
     if rho_static is None or rho_dynamic is None:
         notes.append("Spearman undefined when labels or scores have no rank variation.")
     if all_unverified:
-        notes.append("Pair equivalence not fully verified: some generation settings were not recorded in both arms.")
+        notes.append(
+            "Pair equivalence not fully verified: some generation settings were not recorded in both arms."
+        )
 
     n_examples = len(examples_by_id)
     return {
@@ -252,7 +283,9 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
             "n_completed_pairs": len(paired),
             "n_excluded": len(excluded),
             "completion_rate": len(paired) / n_examples if n_examples else None,
-            "label_counts_selected": dict(Counter(e["real_outcome"] for e in examples_by_id.values())),
+            "label_counts_selected": dict(
+                Counter(e["real_outcome"] for e in examples_by_id.values())
+            ),
             "label_counts_evaluated": dict(Counter(labels)),
         },
         "metrics": {
@@ -260,12 +293,52 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
             "label_counts": dict(Counter(labels)),
             "roc_auc_static": auc_static,
             "roc_auc_dynamic": auc_dynamic,
-            "roc_auc_delta": auc_dynamic - auc_static if auc_static is not None and auc_dynamic is not None else None,
+            "roc_auc_delta": (
+                auc_dynamic - auc_static
+                if auc_static is not None and auc_dynamic is not None
+                else None
+            ),
             "spearman_static": rho_static,
             "spearman_dynamic": rho_dynamic,
-            "spearman_delta": rho_dynamic - rho_static if rho_static is not None and rho_dynamic is not None else None,
-            "mean_score_delta": sum(row["score_delta"] for row in paired) / len(paired) if paired else None,
+            "spearman_delta": (
+                rho_dynamic - rho_static
+                if rho_static is not None and rho_dynamic is not None
+                else None
+            ),
+            "mean_score_delta": (
+                sum(row["score_delta"] for row in paired) / len(paired)
+                if paired
+                else None
+            ),
         },
         "unverified_pair_settings": all_unverified,
         "notes": notes,
     }
+
+
+def to_schema_summary(report):
+    """Convert to shared schema; save the detailed report separately."""
+    from src.schemas import EvaluationSummary, PairedComparison
+
+    def convert_row(row, status):
+        return PairedComparison(
+            conversation_id=row["conversation_id"],
+            real_outcome=row["real_outcome"],
+            static_run_id=row.get("static_run_id"),
+            dynamic_run_id=row.get("dynamic_run_id"),
+            static_score=row.get("static_score"),
+            dynamic_score=row.get("dynamic_score"),
+            status=status,
+            pair_id=row.get("pair_id"),
+        )
+
+    rows = [convert_row(row, row["status"]) for row in report["pairs"]]
+    rows.extend(convert_row(row, "excluded") for row in report["excluded"])
+
+    return EvaluationSummary(
+        n_examples=report["coverage"]["n_examples"],
+        n_paired_complete=report["coverage"]["n_completed_pairs"],
+        rows=rows,
+        auc_static=report["metrics"]["roc_auc_static"],
+        auc_dynamic=report["metrics"]["roc_auc_dynamic"],
+    )

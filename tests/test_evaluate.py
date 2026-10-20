@@ -13,11 +13,21 @@ def sample():
         {"seed": {"conversation_id": "civil"}, "real_outcome": 0},
     ]
     runs = [
-        {"run_id": f"{cid}-{arm}", "conversation_id": cid, "condition": arm, "status": "completed"}
-        for cid in ("attack", "civil") for arm in ("static", "dynamic")
+        {
+            "run_id": f"{cid}-{arm}",
+            "conversation_id": cid,
+            "condition": arm,
+            "status": "completed",
+        }
+        for cid in ("attack", "civil")
+        for arm in ("static", "dynamic")
     ]
-    values = {"attack-static": 0.2, "attack-dynamic": 0.9,
-              "civil-static": 0.8, "civil-dynamic": 0.1}
+    values = {
+        "attack-static": 0.2,
+        "attack-dynamic": 0.9,
+        "civil-static": 0.8,
+        "civil-dynamic": 0.1,
+    }
     scores = [{"run_id": rid, "score": value} for rid, value in values.items()]
     return examples, runs, scores
 
@@ -56,7 +66,13 @@ def test_invalid_score_fails():
 
 def test_duplicate_condition_fails():
     examples, runs, scores = sample()
-    runs.append({"run_id": "attack-static-two", "conversation_id": "attack", "condition": "static"})
+    runs.append(
+        {
+            "run_id": "attack-static-two",
+            "conversation_id": "attack",
+            "condition": "static",
+        }
+    )
     scores.append({"run_id": "attack-static-two", "score": 0.2})
     with pytest.raises(ValueError, match="Duplicate static"):
         evaluate_conditions(examples, runs, scores)
@@ -104,13 +120,18 @@ def test_report_wholly_missing_example():
     assert summary["coverage"]["n_examples"] == 3
     assert summary["coverage"]["n_attempted"] == 2
     assert summary["coverage"]["n_excluded"] == 1
-    assert set(summary["excluded"][0]["reasons"]) == {"missing_static_run", "missing_dynamic_run"}
+    assert set(summary["excluded"][0]["reasons"]) == {
+        "missing_static_run",
+        "missing_dynamic_run",
+    }
 
 
 def test_mismatched_generation_settings_raise_or_report():
     examples, runs, scores = sample()
     for run in runs:
-        run["run_metadata"] = {"simulation_config": {"model_id": "same", "temperature": 0.4}}
+        run["run_metadata"] = {
+            "simulation_config": {"model_id": "same", "temperature": 0.4}
+        }
     runs[1]["run_metadata"]["simulation_config"]["model_id"] = "different"
     with pytest.raises(ValueError, match="Mismatched paired settings"):
         evaluate_conditions(examples, runs, scores)
@@ -129,8 +150,13 @@ def test_missing_settings_are_flagged_not_assumed_equal():
 def test_static_dynamic_difference_is_expected_not_a_setting_mismatch():
     examples, runs, scores = sample()
     for run in runs:
-        run["run_metadata"] = {"config": {"model_id": "same", "temperature": 0.6,
-                                          "condition": run["condition"]}}
+        run["run_metadata"] = {
+            "config": {
+                "model_id": "same",
+                "temperature": 0.6,
+                "condition": run["condition"],
+            }
+        }
     assert len(evaluate_conditions(examples, runs, scores)["pairs"]) == 2
 
 
@@ -206,3 +232,42 @@ def test_dataclass_score_accepted():
     examples, runs, scores = sample()
     scores = [Record(s["run_id"], s["score"]) for s in scores]
     assert len(evaluate_conditions(examples, runs, scores)["pairs"]) == 2
+
+
+def test_schema_summary_conversion():
+    from src.evaluate import to_schema_summary
+    from src.schemas import EvaluationSummary, from_dict, to_dict
+
+    report = evaluate_conditions(*sample())
+    summary = to_schema_summary(report)
+
+    assert isinstance(summary, EvaluationSummary)
+    assert summary.n_examples == 2
+    assert summary.n_paired_complete == 2
+    assert len(summary.rows) == 2
+
+    assert summary.auc_static == 0.0
+    assert summary.auc_dynamic == 1.0
+
+    # Verify the result can be serialized and reconstructed.
+    assert from_dict(EvaluationSummary, to_dict(summary)) == summary
+
+
+def test_schema_conversion_preserves_failed_pair_details():
+    from src.evaluate import to_schema_summary
+    from src.schemas import EvaluationSummary, from_dict, to_dict
+
+    examples, runs, scores = sample()
+    examples[0]["pair_id"] = "civil"
+    runs[1]["status"] = "failed"
+    scores = [s for s in scores if s["run_id"] != "attack-dynamic"]
+
+    report = evaluate_conditions(examples, runs, scores, on_incomplete="report")
+    summary = to_schema_summary(report)
+
+    excluded = next(r for r in summary.rows if r.conversation_id == "attack")
+    assert excluded.pair_id == "civil"
+    assert excluded.static_score == 0.2
+    assert excluded.dynamic_score is None
+    assert report["excluded"][0]["reasons"] == ["dynamic_run_status:failed"]
+    assert from_dict(EvaluationSummary, to_dict(summary)) == summary
