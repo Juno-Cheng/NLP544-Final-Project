@@ -36,6 +36,7 @@
     "prompt_version": "reply_v1",
     "updater_version": "trust_v1",
     "max_generated_turns": 2,
+    "max_output_tokens": 256,
     "temperature": 0.0,
     "random_seed": 544,
     "error": null,

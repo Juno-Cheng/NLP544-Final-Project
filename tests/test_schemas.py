@@ -11,17 +11,21 @@ import pytest
 import yaml
 
 from src.data_loader import load_and_prepare, seeds_only
+from src.escalation_judge import score_escalation
+from src.evaluate import evaluate_conditions
 from src.schemas import (
     AgentState,
     ConversationSeed,
+    CoverageReport,
     DataConfig,
     DialogueTurn,
     EscalationScore,
+    EvaluationMetrics,
     EvaluationSummary,
+    ExcludedPair,
     GenerationConfig,
     JudgeConfig,
     LabeledExample,
-    PairedComparison,
     PersonaConfig,
     SimulationConfig,
     SimulationResult,
@@ -80,6 +84,7 @@ def test_paired_results_share_opening_and_settings():
     assert static.run_metadata.temperature == dynamic.run_metadata.temperature
     assert static.run_metadata.random_seed == dynamic.run_metadata.random_seed
     assert static.run_metadata.max_generated_turns == dynamic.run_metadata.max_generated_turns
+    assert static.run_metadata.max_output_tokens == dynamic.run_metadata.max_output_tokens
 
 
 def test_fixture_trust_matches_condition():
@@ -164,24 +169,43 @@ def test_data_yaml_matches_data_config():
     assert config.min_opening_turns == 3
 
 
-def test_evaluation_summary_round_trip():
-    summary = EvaluationSummary(
-        n_examples=1,
-        n_paired_complete=1,
-        rows=[
-            PairedComparison(
-                conversation_id="example_001",
-                real_outcome=1,
-                static_run_id="example_001-static",
-                dynamic_run_id="example_001-dynamic",
-                static_score=0.35,
-                dynamic_score=0.82,
-                status="paired_complete",
-                pair_id="example_001_civil",
-            )
-        ],
-    )
-    assert from_dict(EvaluationSummary, to_dict(summary)) == summary
+def test_evaluator_output_matches_evaluation_summary():
+    examples = [
+        {"seed": {"conversation_id": "attack"}, "real_outcome": 1},
+        {"seed": {"conversation_id": "civil"}, "real_outcome": 0},
+    ]
+    settings = {
+        "model_id": "mock",
+        "prompt_version": "reply_v2",
+        "temperature": 0.0,
+        "max_generated_turns": 6,
+        "max_output_tokens": 256,
+        "random_seed": 544,
+    }
+    values = {
+        "attack-static": 0.2,
+        "attack-dynamic": 0.9,
+        "civil-static": 0.8,
+        "civil-dynamic": 0.1,
+    }
+    runs, scores = [], []
+    for conversation_id in ("attack", "civil"):
+        for condition in ("static", "dynamic"):
+            run_id = f"{conversation_id}-{condition}"
+            runs.append({
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                "condition": condition,
+                "status": "ok",
+                "run_metadata": dict(settings),
+            })
+            scores.append({"run_id": run_id, "score": values[run_id]})
+    summary = from_dict(EvaluationSummary, evaluate_conditions(examples, runs, scores))
+    encoded = json.loads(json.dumps(to_dict(summary)))
+    assert from_dict(EvaluationSummary, encoded) == summary
+    assert summary.coverage.n_examples == 2
+    assert summary.metrics.roc_auc_dynamic == 1.0
+    assert summary.unverified_pair_settings == []
 
 
 def test_prepared_examples_match_labeled_example_schema(tmp_path):
@@ -285,6 +309,26 @@ def test_judge_config_rejects_condition_and_label():
         )
 
 
+def test_judge_yaml_parses_and_runtime_callable_scores():
+    raw = yaml.safe_load((ROOT / "configs" / "judge.yaml").read_text(encoding="utf-8"))
+    config = from_dict(JudgeConfig, raw)
+    assert config.rubric_path == "prompts/judge_rubric_v1.txt"
+    assert config.judge_callable is None
+    with pytest.raises(ValueError, match="judge_callable"):
+        score_escalation("example_001-static", [DialogueTurn(0, "A", "hello")], config)
+    scored = score_escalation(
+        "example_001-static",
+        [DialogueTurn(0, "A", "hello")],
+        JudgeConfig(
+            judge_model_id=config.judge_model_id,
+            rubric_version=config.rubric_version,
+            rubric_path=config.rubric_path,
+            judge_callable=lambda prompt: '{"score": 0.4}',
+        ),
+    )
+    assert from_dict(EscalationScore, scored).score == 0.4
+
+
 def test_updater_condition_must_be_static_or_dynamic():
     assert UpdaterConfig(condition="static", updater_version="trust_v1").condition == "static"
     with pytest.raises(ValueError, match="condition"):
@@ -337,23 +381,48 @@ def test_real_outcome_must_be_zero_or_one():
         from_dict(LabeledExample, payload)
 
 
-def test_paired_comparison_allows_a_missing_arm():
-    row = PairedComparison(
+def test_excluded_pair_records_a_missing_arm():
+    row = ExcludedPair(
         conversation_id="example_001",
         real_outcome=0,
         static_run_id="example_001-static",
         dynamic_run_id=None,
-        static_score=0.2,
-        dynamic_score=None,
-        status="failed",
+        reasons=["missing_dynamic_run"],
     )
-    assert row.dynamic_score is None
-    assert from_dict(PairedComparison, to_dict(row)) == row
+    assert row.dynamic_run_id is None
+    assert from_dict(ExcludedPair, to_dict(row)) == row
 
 
-def test_evaluation_summary_cannot_claim_more_pairs_than_examples():
-    with pytest.raises(ValueError, match="n_paired_complete"):
-        EvaluationSummary(n_examples=1, n_paired_complete=2, rows=[])
+def test_evaluation_summary_must_account_for_every_example():
+    coverage = CoverageReport(
+        n_examples=1,
+        n_attempted=0,
+        n_completed_pairs=0,
+        n_excluded=0,
+        completion_rate=0.0,
+        label_counts_selected={},
+        label_counts_evaluated={},
+    )
+    metrics = EvaluationMetrics(
+        n_pairs=0,
+        label_counts={},
+        roc_auc_static=None,
+        roc_auc_dynamic=None,
+        roc_auc_delta=None,
+        spearman_static=None,
+        spearman_dynamic=None,
+        spearman_delta=None,
+        mean_score_delta=None,
+    )
+    with pytest.raises(ValueError, match="every example"):
+        EvaluationSummary(
+            pairs=[],
+            excluded=[],
+            coverage=coverage,
+            metrics=metrics,
+            unverified_pair_settings=[],
+            notes=[],
+        )
 
 
 def test_data_config_rejects_non_positive_sample_size():
