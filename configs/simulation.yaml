@@ -1,0 +1,10 @@
+# Shared generation settings for both arms. Only the trust-update policy differs.
+# Read by scripts/run_experiment.py. Mock mode uses model_id as written here.
+# Live mode uses OPENAI_MODEL when that environment variable is set.
+
+model_id: mock
+prompt_version: reply_v2
+temperature: 0.3
+max_generated_turns: 4
+max_output_tokens: 256
+random_seed: 544
