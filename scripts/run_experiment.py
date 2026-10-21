@@ -3,6 +3,8 @@
 Stages, in order:
     1. Jon's load_and_prepare, or the committed fixture, supplies LabeledExample rows.
     2. Magnus's assign_personas maps each opening onto roles A and B. The seed is all it sees.
+       When configs/updater.yaml sets replay_opening, the rater reads the real opening once
+       and both arms start from the resulting trust.
     3. Aditya's run_simulation runs twice per seed. Arya's PersonaResponseGenerator writes
        replies and Magnus's TrustUpdater applies the condition. Both arms share the settings
        in configs/simulation.yaml.
@@ -34,7 +36,7 @@ import sys
 from copy import deepcopy
 from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from itertools import cycle, islice
 from pathlib import Path
@@ -50,7 +52,7 @@ from src.data_loader import load_and_prepare
 from src.escalation_judge import make_llm_judge_callable, score_escalation
 from src.evaluate import evaluate_conditions, to_schema_summary
 from src.llm_client import MockLLMClient, OpenAILLMClient
-from src.persona import assign_personas, load_persona_configs
+from src.persona import assign_personas, initialize_personas, load_persona_configs
 from src.response_generator import PersonaResponseGenerator
 from src.schemas import (
     CONDITIONS,
@@ -65,7 +67,7 @@ from src.schemas import (
     to_dict,
 )
 from src.simulator import run_simulation
-from src.state_updater import TrustUpdater, load_config as load_updater_config
+from src.state_updater import TrustUpdater, load_config as load_updater_config, sensitivity_by_speaker
 
 SIMULATION_CONFIG = ROOT / "configs" / "simulation.yaml"
 JUDGE_CONFIG = ROOT / "configs" / "judge.yaml"
@@ -242,6 +244,52 @@ def make_judge(
     return make_llm_judge_callable(live, generation)
 
 
+def make_updater(
+    personas: dict,
+    model_id: str,
+    mode: str,
+    live: OpenAILLMClient | None,
+    rating_count: int,
+    on_rating: Callable[[dict[str, Any]], None],
+) -> TrustUpdater:
+    """Trust updater with each speaker's persona sensitivity. Mock ratings are neutral."""
+    return TrustUpdater(
+        _mock_client(MOCK_RATINGS, rating_count) if mode == "mock" else live,
+        model_id,
+        None if mode == "mock" else live_updater_settings(),
+        sensitivity=sensitivity_by_speaker(personas),
+        on_rating=on_rating,
+    )
+
+
+def start_personas(
+    example: LabeledExample,
+    personas: dict,
+    model_id: str,
+    mode: str,
+    live: OpenAILLMClient | None,
+    calls_path: Path,
+) -> dict:
+    """Personas whose initial_trust is the trust after rating the real opening, shared by both arms."""
+    opening = example.seed.opening_turns
+    pair_id = f"pair-{example.seed.conversation_id}"
+    updater = make_updater(
+        personas,
+        model_id,
+        mode,
+        live,
+        len(opening),
+        lambda event: append_jsonl(calls_path, {**event, "run_id": pair_id, "stage": "opening_rating"}),
+    )
+    if not updater.replay_opening_enabled:
+        return personas
+    states = updater.replay_opening(initialize_personas(personas), opening)
+    return {
+        speaker_id: replace(persona, initial_trust=states[speaker_id].trust)
+        for speaker_id, persona in personas.items()
+    }
+
+
 def run_arm(
     example: LabeledExample,
     personas: dict,
@@ -263,14 +311,15 @@ def run_arm(
             calls_path, {**event, "run_id": run_id, "stage": "reply"}
         ),
     )
-    # Magnus: static trust never calls the rater. Dynamic trust uses updater.yaml.
-    updater = TrustUpdater(
-        _mock_client(MOCK_RATINGS, turns) if mode == "mock" else live,
+    # Magnus: static trust never calls the rater. Dynamic trust uses updater.yaml and each
+    # persona's trust_sensitivity.
+    updater = make_updater(
+        personas,
         settings.model_id,
-        None if mode == "mock" else live_updater_settings(),
-        on_rating=lambda event: append_jsonl(
-            calls_path, {**event, "run_id": run_id, "stage": "rating"}
-        ),
+        mode,
+        live,
+        turns,
+        lambda event: append_jsonl(calls_path, {**event, "run_id": run_id, "stage": "rating"}),
     )
     config = SimulationConfig(
         condition,
@@ -413,6 +462,32 @@ def run_experiment(
         for example in examples:
             # Magnus sees the opening only. real_outcome stays on the example until stage 5.
             personas = assign_personas(example.seed, persona_configs)
+            try:
+                personas = start_personas(
+                    example, personas, settings.model_id, mode, live, calls_path
+                )
+            except Exception as exc:  # noqa: BLE001 -- neither arm can start; record both as failed.
+                for condition in CONDITIONS:
+                    append_jsonl(
+                        events_path,
+                        {
+                            "stage": "opening_replay",
+                            "conversation_id": example.seed.conversation_id,
+                            "condition": condition,
+                            "status": "failed",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                continue
+            append_jsonl(
+                events_path,
+                {
+                    "stage": "opening_replay",
+                    "conversation_id": example.seed.conversation_id,
+                    "status": "ok",
+                    "initial_trust": {sid: p.initial_trust for sid, p in personas.items()},
+                },
+            )
             for condition in CONDITIONS:
                 try:
                     result = run_arm(

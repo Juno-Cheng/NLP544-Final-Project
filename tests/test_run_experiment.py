@@ -81,6 +81,39 @@ def test_mock_command_saves_matched_arms_and_hides_the_label(tmp_path):
     assert _load(run_dir / "evaluation_report.json")["pairs"][0]["real_outcome"] == 1
 
 
+def _mock_args(tmp_path, experiment_id):
+    return ["--mode", "mock", "--limit", "1", "--source", "fixture",
+            "--experiment-id", experiment_id, "--output-root", str(tmp_path)]
+
+
+def test_both_arms_start_from_the_replayed_opening(tmp_path, monkeypatch):
+    monkeypatch.setattr("run_experiment.MOCK_RATINGS", ("0",))
+    assert main(_mock_args(tmp_path, "replay")) == 0
+    run_dir = tmp_path / "replay"
+    static = _load(run_dir / "simulations" / "example_001-static.json")
+    dynamic = _load(run_dir / "simulations" / "example_001-dynamic.json")
+    start = static["state_history"][0]["speaker_states"]
+    assert dynamic["state_history"][0]["speaker_states"] == start
+    assert all(state["trust"] < 0.75 for state in start.values())
+    events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text().splitlines()]
+    replay = [e for e in events if e["stage"] == "opening_replay"]
+    assert replay[0]["status"] == "ok"
+    assert replay[0]["initial_trust"] == {sid: state["trust"] for sid, state in start.items()}
+    calls = [json.loads(line) for line in (run_dir / "logs" / "model_calls.jsonl").read_text().splitlines()]
+    assert any(call["stage"] == "opening_rating" for call in calls)
+
+
+def test_failed_opening_replay_is_logged_for_both_arms(tmp_path, monkeypatch):
+    monkeypatch.setattr("run_experiment.MOCK_RATINGS", ("not a number",))
+    assert main(_mock_args(tmp_path, "bad-replay")) == 0
+    run_dir = tmp_path / "bad-replay"
+    events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text().splitlines()]
+    failed = [e for e in events if e["stage"] == "opening_replay"]
+    assert {e["condition"] for e in failed} == {"static", "dynamic"}
+    assert all(e["status"] == "failed" and "non-numeric" in e["error"] for e in failed)
+    assert _load(run_dir / "evaluation.json")["coverage"]["n_excluded"] == 1
+
+
 def test_missing_processed_data_is_reported(tmp_path, monkeypatch):
     def missing():
         raise FileNotFoundError("data/processed/seeds.jsonl")

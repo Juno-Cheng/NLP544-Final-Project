@@ -1,11 +1,19 @@
 # Trust-update settings read by src/state_updater.py.
 # Decided by Magnus (see DECISIONS.md section F); bump updater_version whenever anything here changes.
 
-updater_version: trust_v2
+updater_version: trust_v4
 
-# Step size: trust' = clamp(trust + alpha * (rating - 0.5)). A neutral rating of 0.5 leaves trust
-# unchanged. Only the dynamic condition uses it; static trust never changes.
-alpha: 0.5
+# Default step sizes: trust' = clamp(trust + alpha * (rating - 0.5)), using alpha_down for ratings
+# below the neutral 0.5 and alpha_up otherwise, so trust falls faster than it recovers. A neutral
+# rating leaves trust unchanged. A persona's trust_sensitivity in configs/personas.yaml overrides
+# these. Only the dynamic condition uses them during the run; static trust never changes.
+alpha_up: 0.25
+alpha_down: 0.5
+
+# Rate the real opening turns once per conversation, before either arm runs, and start both
+# arms from the resulting trust. Each turn is rated by the other speaker using only the turns
+# so far. The static arm then holds that value; the dynamic arm keeps updating.
+replay_opening: true
 
 # Rater call settings (dynamic only). The model id is passed in by the caller,
 # like the reply generator, so both use the same OPENAI_MODEL.

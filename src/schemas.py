@@ -223,18 +223,31 @@ class LabeledExample:
             _nonempty(self.pair_id, "pair_id")
 
 
+TRUST_SENSITIVITY_KEYS = ("alpha_up", "alpha_down")
+
+
 @dataclass(frozen=True)
 class PersonaConfig:
-    """Stable traits and the trust value both arms start from. Trust is not a measured human score."""
+    """Stable traits and the trust value both arms start from. Trust is not a measured human score.
+
+    trust_sensitivity holds this persona's alpha_up/alpha_down step sizes; None uses the updater defaults.
+    """
 
     persona_id: str
     stable_traits: dict[str, Any]
     initial_trust: float
+    trust_sensitivity: dict[str, float] | None = None
 
     def __post_init__(self) -> None:
         _nonempty(self.persona_id, "persona_id")
         _string_keyed(self.stable_traits, "stable_traits")
         _unit_interval(self.initial_trust, "initial_trust")
+        if self.trust_sensitivity is not None:
+            if set(self.trust_sensitivity) != set(TRUST_SENSITIVITY_KEYS):
+                raise ValueError(f"trust_sensitivity must have exactly the keys {TRUST_SENSITIVITY_KEYS}")
+            for key, alpha in self.trust_sensitivity.items():
+                if not 0.0 < alpha <= 1.0:  # also rejects nan
+                    raise ValueError(f"trust_sensitivity.{key} must be in (0, 1], got {alpha}")
 
 
 @dataclass(frozen=True)

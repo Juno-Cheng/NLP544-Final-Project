@@ -25,7 +25,7 @@ def history():
     return from_dict(ConversationSeed, json.loads(path.read_text())).opening_turns
 
 
-@pytest.fixture(params=["reply_v1", "reply_v2"])
+@pytest.fixture(params=["reply_v1", "reply_v2", "reply_v3"])
 def config(request):
     return GenerationConfig("mock", 0.3, 256, request.param, 544)
 
@@ -48,7 +48,7 @@ def test_reply_uses_actor_and_next_turn_id(history, config, speaker):
         turn.text for turn in history
     ]
     expected_keys = {"actor", "history"}
-    if config.prompt_version == "reply_v2":
+    if config.prompt_version in ("reply_v2", "reply_v3"):
         expected_keys.add("trust_level")
         assert payload["trust_level"] == describe_trust(actor.trust)
     assert set(payload) == expected_keys
@@ -176,9 +176,10 @@ def test_mock_exhaustion_propagates(history, config):
         (1.0, "trusting"),
     ],
 )
-def test_v2_passes_all_trust_bands_and_numeric_value(history, trust, level):
+@pytest.mark.parametrize("version", ["reply_v2", "reply_v3"])
+def test_band_prompts_pass_all_trust_bands_and_numeric_value(history, trust, level, version):
     client = MockLLMClient(["A reply"])
-    config = GenerationConfig("mock", 0.3, 256, "reply_v2", 544)
+    config = GenerationConfig("mock", 0.3, 256, version, 544)
     PersonaResponseGenerator(client)(history, AgentState("A", trust, {}), config)
     payload = json.loads(client.requests[0]["payload"])
     assert payload["actor"]["trust"] == trust

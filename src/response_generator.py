@@ -14,6 +14,7 @@ from src.persona import describe_trust
 from src.schemas import AgentState, DialogueTurn, GenerationConfig, from_dict, to_dict
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
+TRUST_BAND_PROMPTS = ("reply_v2", "reply_v3")
 
 
 class PersonaResponseGenerator:
@@ -77,7 +78,7 @@ class PersonaResponseGenerator:
             "history": [to_dict(turn) for turn in turns],
         }
         # Keep v1's experimental inputs unchanged for reproducible older runs.
-        if config.prompt_version == "reply_v2":
+        if config.prompt_version in TRUST_BAND_PROMPTS:
             payload_data["trust_level"] = describe_trust(actor.trust)
         payload = json.dumps(payload_data, ensure_ascii=False, allow_nan=False)
         completion = self._client.complete(instructions, payload, config)

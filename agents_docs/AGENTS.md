@@ -33,7 +33,7 @@ confirmed requirements; examples are not evidence of implementation or results.
 
 Arya owns [the model client](../src/llm_client.py),
 [reply generation](../src/response_generator.py), and
-[the current reply prompt](../prompts/reply_v2.txt).
+[the current reply prompt](../prompts/reply_v3.txt).
 Aditya owns simulation, Magnus persona/trust updates, Jon data preparation,
 Prakhar shared schemas and experiment integration, and Shadi judging/evaluation.
 Coordinate changes to another owner's modules. Shared schema and fixture changes
@@ -72,8 +72,8 @@ need the integration owner's approval under the repository workflow.
 - The current Responses adapter records requested seed but does not apply it.
   Temperature omission is explicit and recorded; keep it identical across arms.
 - Current trust semantics and 0.75 post-opening initialization are recorded in
-  DECISIONS §F. Use `reply_v2` plus the configured trust bands for the current pilot;
-  preserve `reply_v1` behavior for old experiments. Turn budgets remain caller settings. A mock or small smoke test does not establish predictive superiority.
+  DECISIONS §F. Use `reply_v3` plus the configured trust bands for the current pilot;
+  preserve `reply_v1`/`reply_v2` behavior for old experiments. Turn budgets remain caller settings. A mock or small smoke test does not establish predictive superiority.
 
 ## Environment and verification
 

@@ -3,7 +3,7 @@
 # Live mode uses OPENAI_MODEL when that environment variable is set.
 
 model_id: mock
-prompt_version: reply_v2
+prompt_version: reply_v3
 temperature: 0.3
 max_generated_turns: 4
 max_output_tokens: 1024
