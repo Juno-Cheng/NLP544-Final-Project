@@ -31,6 +31,7 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -64,7 +65,7 @@ from src.schemas import (
     to_dict,
 )
 from src.simulator import run_simulation
-from src.state_updater import TrustUpdater
+from src.state_updater import TrustUpdater, load_config as load_updater_config
 
 SIMULATION_CONFIG = ROOT / "configs" / "simulation.yaml"
 JUDGE_CONFIG = ROOT / "configs" / "judge.yaml"
@@ -73,7 +74,7 @@ DEFAULT_OUTPUT_ROOT = ROOT / "outputs"
 
 # JudgeConfig has no temperature field. The judge call stays deterministic and short.
 JUDGE_TEMPERATURE = 0.0
-JUDGE_MAX_OUTPUT_TOKENS = 64
+JUDGE_MAX_OUTPUT_TOKENS = 1024
 # Neutral canned replies. Ratings of 0.5 leave dynamic trust unchanged. The judge score
 # is fixed and is never taken from the held-out label.
 MOCK_REPLIES = (
@@ -206,13 +207,21 @@ def _mock_client(lines: Iterable[str], count: int) -> MockLLMClient:
     return MockLLMClient(islice(cycle(lines), count))
 
 
+def live_updater_settings() -> dict:
+    """Copy the updater config and give the rater room for reasoning tokens."""
+    settings = deepcopy(load_updater_config())
+    settings["rater"]["max_output_tokens"] = max(int(settings["rater"]["max_output_tokens"]), 1024)
+    return settings
+
+
 def build_live_client() -> OpenAILLMClient:
     """Open one OpenAI client. Credentials stay in the environment."""
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("live mode needs OPENAI_API_KEY in the environment")
     from openai import OpenAI
 
-    return OpenAILLMClient(OpenAI())
+    # gpt-5.5 reasons by default and rejects a temperature field.
+    return OpenAILLMClient(OpenAI(), send_temperature=False)
 
 
 def make_judge(
@@ -258,6 +267,7 @@ def run_arm(
     updater = TrustUpdater(
         _mock_client(MOCK_RATINGS, turns) if mode == "mock" else live,
         settings.model_id,
+        None if mode == "mock" else live_updater_settings(),
         on_rating=lambda event: append_jsonl(
             calls_path, {**event, "run_id": run_id, "stage": "rating"}
         ),

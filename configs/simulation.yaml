@@ -6,5 +6,5 @@ model_id: mock
 prompt_version: reply_v2
 temperature: 0.3
 max_generated_turns: 4
-max_output_tokens: 256
+max_output_tokens: 1024
 random_seed: 544
