@@ -3,10 +3,14 @@
 Static keeps trust fixed and makes no model call. Dynamic asks a rater model how
 cooperative the observed turn is (rating in [0, 1], 0.5 = neutral) and shifts trust by it:
     trust' = clamp(trust + alpha * (rating - 0.5))
-so a neutral message leaves trust unchanged.
+with alpha = alpha_down below 0.5 and alpha_up otherwise, so trust falls faster than it
+recovers and a neutral message leaves trust unchanged. Each speaker can have its own
+alphas (a persona's trust_sensitivity); otherwise configs/updater.yaml supplies them.
 
 Usage:
-    updater = TrustUpdater(client, model_id=os.environ["OPENAI_MODEL"], on_rating=log)
+    updater = TrustUpdater(client, model_id=os.environ["OPENAI_MODEL"],
+                           sensitivity=sensitivity_by_speaker(personas), on_rating=log)
+    start = updater.replay_opening(initialize_personas(personas), seed.opening_turns)
     result = updater(state, observed_turn, visible_history, UpdaterConfig("dynamic", updater.version))
 
 The client is anything with complete(instructions, payload, config) returning an
@@ -22,7 +26,15 @@ from typing import Any
 
 import yaml
 
-from src.schemas import AgentState, DialogueTurn, GenerationConfig, StateUpdateResult, UpdaterConfig, to_dict
+from src.schemas import (
+    AgentState,
+    DialogueTurn,
+    GenerationConfig,
+    PersonaConfig,
+    StateUpdateResult,
+    UpdaterConfig,
+    to_dict,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "configs" / "updater.yaml"
@@ -46,6 +58,22 @@ def parse_rating(text: str) -> float:
     return rating
 
 
+def _check_alphas(alphas: dict[str, float], where: str) -> tuple[float, float]:
+    """Return (alpha_up, alpha_down), each required to be in (0, 1]."""
+    checked = []
+    for name in ("alpha_up", "alpha_down"):
+        alpha = float(alphas[name])
+        if not 0.0 < alpha <= 1.0:  # also rejects nan, which would silently zero every trust
+            raise ValueError(f"{where} {name} must be in (0, 1], got {alpha}")
+        checked.append(alpha)
+    return checked[0], checked[1]
+
+
+def sensitivity_by_speaker(personas: dict[str, PersonaConfig]) -> dict[str, dict[str, float] | None]:
+    """Each speaker's trust_sensitivity, keyed like the speaker-keyed personas from assign_personas."""
+    return {speaker_id: persona.trust_sensitivity for speaker_id, persona in personas.items()}
+
+
 class TrustUpdater:
     """Callable StateUpdater for run_simulation; the client is only called in the dynamic condition."""
 
@@ -55,13 +83,20 @@ class TrustUpdater:
         model_id: str,
         settings: dict | None = None,
         *,
+        sensitivity: dict[str, dict[str, float] | None] | None = None,
         on_rating: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
+        """sensitivity maps speaker_id to its alphas; None for a speaker means the config defaults."""
         settings = load_config() if settings is None else settings
         self.version = settings["updater_version"]
-        self.alpha = float(settings["alpha"])
-        if not 0.0 < self.alpha <= 1.0:  # also rejects nan, which would silently zero every trust
-            raise ValueError(f"alpha must be in (0, 1], got {self.alpha}")
+        self.replay_opening_enabled = bool(settings.get("replay_opening", False))
+        self.alpha_up, self.alpha_down = _check_alphas(settings, "default")
+        self.sensitivity = None
+        if sensitivity is not None:
+            self.sensitivity = {
+                speaker_id: (self.alpha_up, self.alpha_down) if alphas is None else _check_alphas(alphas, speaker_id)
+                for speaker_id, alphas in sensitivity.items()
+            }
         rater = settings["rater"]
         self.rater_config = GenerationConfig(
             model_id, rater["temperature"], rater["max_output_tokens"], rater["prompt_version"], rater["random_seed"]
@@ -88,10 +123,38 @@ class TrustUpdater:
 
         if config.condition == "static":
             return StateUpdateResult(current_state, current_state.trust)
+        alpha_up, alpha_down = self.alphas_for(current_state.speaker_id)
         rating = self.rate(current_state.speaker_id, observed_turn, visible_history)
+        alpha = alpha_down if rating < 0.5 else alpha_up
         # Rounding keeps float error from dropping trust just below a band edge (0.3999... vs 0.4).
-        trust = round(min(1.0, max(0.0, current_state.trust + self.alpha * (rating - 0.5))), 6)
+        trust = round(min(1.0, max(0.0, current_state.trust + alpha * (rating - 0.5))), 6)
         return StateUpdateResult(replace(current_state, trust=trust), current_state.trust)
+
+    def alphas_for(self, speaker_id: str) -> tuple[float, float]:
+        """(alpha_up, alpha_down) for this speaker; an unknown speaker is an error once sensitivity is set."""
+        if self.sensitivity is None:
+            return self.alpha_up, self.alpha_down
+        if speaker_id not in self.sensitivity:
+            raise ValueError(f"no trust sensitivity for speaker {speaker_id!r}")
+        return self.sensitivity[speaker_id]
+
+    def replay_opening(self, states: dict[str, AgentState], opening_turns: list[DialogueTurn]) -> dict[str, AgentState]:
+        """Rate each real opening turn as its receiver would and return the post-opening states.
+
+        Every turn is read by the other speaker, using only the turns up to and including it.
+        Callers give the result to both arms, so static and dynamic still start identical.
+        """
+        if len(states) != 2:
+            raise ValueError("opening replay needs exactly two speakers")
+        states = dict(states)
+        config = UpdaterConfig("dynamic", self.version)
+        for index, turn in enumerate(opening_turns):
+            if turn.speaker_id not in states:
+                raise ValueError(f"opening speaker {turn.speaker_id!r} has no state")
+            receiver_id = next(speaker for speaker in states if speaker != turn.speaker_id)
+            visible = list(opening_turns[: index + 1])
+            states[receiver_id] = self.update_state(states[receiver_id], turn, visible, config).state
+        return states
 
     def rate(self, reader_id: str, observed_turn: DialogueTurn, visible_history: list[DialogueTurn]) -> float:
         """Rater's score for observed_turn (the last visible turn); it never sees trust, so ratings don't feed back."""

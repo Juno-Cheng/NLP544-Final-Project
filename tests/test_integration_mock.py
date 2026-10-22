@@ -125,7 +125,7 @@ def test_paired_trust_updates_reach_next_receiver_reply(seed):
         )
     assert dynamic.state_history[1].speaker_states["EditorTwo"].trust == 0.5
     assert dynamic.state_history[2].speaker_states["EditorOne"].trust == 0.625
-    assert dynamic.state_history[-1].speaker_states["EditorOne"].trust == 0.875
+    assert dynamic.state_history[-1].speaker_states["EditorOne"].trust == 0.75
     payloads = [json.loads(request["payload"]) for request in traces["dynamic"][0]]
     assert [p["actor"]["trust"] for p in payloads] == [0.75, 0.5, 0.625, 0.5]
     assert [p["trust_level"]["level"] for p in payloads] == [

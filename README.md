@@ -34,7 +34,8 @@ NLP544-Final-Project/
 │
 ├── prompts/                     # versioned text, so prompt changes show up in diffs
 │   ├── reply_v1.txt             # persona + trust-conditioned reply prompt (Arya)
-│   ├── reply_v2.txt             # current prompt with Magnus’s 10 trust levels
+│   ├── reply_v2.txt             # prompt with Magnus’s 10 trust levels
+│   ├── reply_v3.txt             # current prompt: trust band sets mood and tone
 │   ├── trust_update_v2.txt      # LLM rater prompt for the dynamic updater (Magnus)
 │   └── judge_rubric_v1.txt      # blind rubric (Shadi)
 │
@@ -199,15 +200,20 @@ The experiment owner still needs to wire these events into `RunMetadata`.
 
 The generator requires an ordered, nonempty two-speaker history and returns
 `last_turn_id + 1`. It never appends the reply to the caller's history or updates
-trust; the simulator does that. With `reply_v2`, the payload includes
+trust; the simulator does that. With `reply_v2` and `reply_v3`, the payload includes
 `trust_level = describe_trust(actor.trust)`: the named band and behavior from
 `configs/personas.yaml`, recomputed for each reply. Numeric trust remains present
-so within-band changes are not lost. `reply_v1` keeps its original payload without
-trust levels for older experiments; use `reply_v2` for the current pilot.
+so within-band changes are not lost. `reply_v3` (current) makes the band the only
+source of mood and tone; personas no longer carry a fixed temperament. `reply_v1`
+and `reply_v2` remain for older experiments.
 
-Magnus's [recorded decisions](agents_docs/DECISIONS.md) initialize both arms at
-0.75 after the opening. Only the receiver updates after a newly generated turn;
-`trust_v2` applies `clamp(trust + 0.5 * (rating - 0.5))`. Static mode never calls
+Magnus's [recorded decisions](agents_docs/DECISIONS.md) start both speakers from a
+0.75 prior. With `replay_opening`, the runner rates each real opening turn once, from
+the receiver's side, and both arms start from that result. Only the receiver updates
+after a newly generated turn; `trust_v4` applies `clamp(trust + alpha * (rating - 0.5))`
+with the receiver's own `alpha_down` below 0.5 and `alpha_up` otherwise. A (0.3 up,
+0.4 down) forgives quickly; B (0.2 up, 0.6 down) is slow to forgive. Trust falls
+faster than it recovers for both (`trust_v2` used a symmetric 0.5). Static mode never calls
 the rater. Both clients implement the same `complete()` interface, so the injected
 `OpenAILLMClient` or `MockLLMClient` also works with `TrustUpdater`.
 The rater currently requests 16 output tokens at temperature 0; live suitability

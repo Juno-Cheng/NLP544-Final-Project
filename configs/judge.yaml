@@ -1,4 +1,4 @@
-# Mock-stage settings. Runtime model adapter is injected in Python until shared client is finalized.
-judge_model_id: mock-judge
+# Same model as OPENAI_MODEL. The callable is still injected at runtime.
+judge_model_id: gpt-5.5
 rubric_version: v1
 rubric_path: prompts/judge_rubric_v1.txt

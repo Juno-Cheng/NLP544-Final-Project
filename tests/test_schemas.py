@@ -353,6 +353,17 @@ def test_persona_trust_accepts_bounds_and_rejects_outside():
         PersonaConfig(persona_id="A", stable_traits={}, initial_trust=-0.1)
 
 
+def test_persona_trust_sensitivity_is_optional_and_checked():
+    assert PersonaConfig("A", {}, 0.75).trust_sensitivity is None
+    ok = {"alpha_up": 0.2, "alpha_down": 0.6}
+    assert from_dict(PersonaConfig, {"persona_id": "A", "stable_traits": {}, "initial_trust": 0.75,
+                                     "trust_sensitivity": ok}).trust_sensitivity == ok
+    with pytest.raises(ValueError, match="exactly the keys"):
+        PersonaConfig("A", {}, 0.75, {"alpha_up": 0.2})
+    with pytest.raises(ValueError, match="alpha_down"):
+        PersonaConfig("A", {}, 0.75, {"alpha_up": 0.2, "alpha_down": 1.5})
+
+
 def test_agent_state_cannot_be_reassigned():
     state = AgentState(speaker_id="A", trust=0.7, stable_traits={})
     with pytest.raises(AttributeError):
