@@ -5,11 +5,13 @@ condition, trust state, or human outcome labels.
 """
 
 import json
+import logging
 import math
 from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LOGGER = logging.getLogger(__name__)
 
 
 def _record(value):
@@ -65,6 +67,7 @@ def score_escalation(run_id, transcript, config, *, judge_callable=None):
 
     rubric = rubric_path.read_text(encoding="utf-8")
     prompt = build_judge_prompt(transcript, rubric)
+    LOGGER.info("judging %s (%s turns, rubric %s)", run_id, len(transcript), rubric_version)
     response = judge(prompt)
     if isinstance(response, str):
         try:
@@ -81,6 +84,7 @@ def score_escalation(run_id, transcript, config, *, judge_callable=None):
     if not math.isfinite(score) or not 0 <= score <= 1:
         raise ValueError("Judge score must be finite and between 0 and 1")
 
+    LOGGER.info("judge %s score=%.3f", run_id, score)
     return {
         "run_id": run_id,
         "score": score,

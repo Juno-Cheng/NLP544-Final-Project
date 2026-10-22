@@ -73,7 +73,7 @@ need the integration owner's approval under the repository workflow.
   Temperature omission is explicit and recorded; keep it identical across arms.
 - Current trust semantics and 0.75 post-opening initialization are recorded in
   DECISIONS §F. Use `reply_v3` plus the configured trust bands for the current pilot;
-  preserve `reply_v1`/`reply_v2` behavior for old experiments. Turn budgets remain caller settings. A mock or small smoke test does not establish predictive superiority.
+  preserve `reply_v1`/`reply_v2` behavior for old experiments. Turn budgets come from `configs/simulation.yaml` (`match_pair` gives both conversations in an attack/civil pair the longer real length; see DECISIONS "Turn budget"). A mock or small smoke test does not establish predictive superiority.
 
 ## Environment and verification
 

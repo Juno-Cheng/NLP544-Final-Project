@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import logging
 import random
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "configs" / "data.yaml"
+LOGGER = logging.getLogger(__name__)
 
 
 #================ Helper Functions==================
@@ -53,6 +55,7 @@ def join_seeds_and_labels(seeds: list[dict], labels: list[dict]) -> list[dict]:
             "split": label["split"],
             "pair_id": label["pair_id"],
             "verified": bool(label.get("verified")),
+            "real_turn_count": label.get("real_turn_count"),
         })
     return examples
 
@@ -113,7 +116,7 @@ def sample_examples(examples: list[dict], n: int | None, keep_pairs: bool, rando
 #================ Main Functions==================
 # Load seeds + labels, join them, filter and sample according to data.yaml.
 def load_and_prepare(source: str = "cga-wiki", config: dict | None = None) -> list[dict]:
-    """Return LabeledExample dicts: {seed, real_outcome, label_definition, split, pair_id, verified}."""
+    """Return LabeledExample dicts: {seed, real_outcome, label_definition, split, pair_id, verified, real_turn_count}."""
     config = config or load_config()
     if config.get("source", source) != source:
         raise ValueError(f"source {source!r} does not match config source {config['source']!r}")
@@ -122,20 +125,28 @@ def load_and_prepare(source: str = "cga-wiki", config: dict | None = None) -> li
     seeds = read_jsonl(ROOT / config["seeds_path"])
     labels = read_jsonl(ROOT / config["labels_path"])
     examples = join_seeds_and_labels(seeds, labels)
+    LOGGER.info("joined %s seeds with labels", len(examples))
 
     # 2. Apply the split / verified / speaker / opening-length filters
     examples = filter_by_split(examples, config["splits"])
+    LOGGER.info("after split %s: %s", config["splits"], len(examples))
     if config["verified_only"]: # only keep examples that were verified by an internal annotator, this means that the label was checked by a human and more reliable.
         examples = filter_verified(examples)
+        LOGGER.info("after verified_only: %s", len(examples))
     examples = filter_by_speakers(examples, config["min_speakers"], config["max_speakers"])
+    LOGGER.info("after speaker filter: %s", len(examples))
     examples = filter_by_opening_length(examples, config["min_opening_turns"])
+    LOGGER.info("after opening-length filter: %s", len(examples))
 
     # 3. Drop conversations whose pair partner was filtered out
     if config["keep_pairs"]:
         examples = complete_pairs(examples)
+        LOGGER.info("after complete_pairs: %s", len(examples))
 
     # 4. Sample down to sample_size, keeping pairs together if configured
-    return sample_examples(examples, config["sample_size"], config["keep_pairs"], config["random_seed"])
+    sampled = sample_examples(examples, config["sample_size"], config["keep_pairs"], config["random_seed"])
+    LOGGER.info("sampled %s conversations (sample_size=%s)", len(sampled), config["sample_size"])
+    return sampled
 
 
 # Strip labels: the simulator and judge only ever receive these seeds.

@@ -31,7 +31,7 @@ from src.data_loader import (
 )
 
 SEED_KEYS = {"conversation_id", "source", "opening_turns"}
-EXAMPLE_KEYS = {"seed", "real_outcome", "label_definition", "split", "pair_id", "verified"}
+EXAMPLE_KEYS = {"seed", "real_outcome", "label_definition", "split", "pair_id", "verified", "real_turn_count"}
 
 
 def make_seed(cid, speakers):
@@ -211,7 +211,7 @@ def test_seeds_only_contains_no_label_information(config):
     for seed in seeds:
         assert set(seed) == SEED_KEYS
     dumped = json.dumps(seeds)
-    for leaked in ("real_outcome", "split", "pair_id", "verified", "label_definition"):
+    for leaked in ("real_outcome", "split", "pair_id", "verified", "label_definition", "real_turn_count"):
         assert leaked not in dumped
 
 

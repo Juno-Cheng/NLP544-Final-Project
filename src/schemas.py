@@ -205,7 +205,12 @@ class ConversationSeed:
 
 @dataclass(frozen=True)
 class LabeledExample:
-    """Seed plus the real outcome. Only evaluation code should receive this object."""
+    """Seed plus the real outcome. Only evaluation code should receive this object.
+
+    real_turn_count is the real conversation's length including the opening. Attack
+    conversations end on the attack, so it is label information: the runner may use it
+    only to size the simulation, and it must never reach the generator, updater, or judge.
+    """
 
     seed: ConversationSeed
     real_outcome: int
@@ -213,6 +218,7 @@ class LabeledExample:
     split: str
     pair_id: str | None = None
     verified: bool = False
+    real_turn_count: int | None = None
 
     def __post_init__(self) -> None:
         if self.real_outcome not in (0, 1):
@@ -221,6 +227,10 @@ class LabeledExample:
         _nonempty(self.split, "split")
         if self.pair_id is not None:
             _nonempty(self.pair_id, "pair_id")
+        if self.real_turn_count is not None and self.real_turn_count < len(self.seed.opening_turns):
+            raise ValueError(
+                f"real_turn_count {self.real_turn_count} is shorter than the {len(self.seed.opening_turns)}-turn opening"
+            )
 
 
 TRUST_SENSITIVITY_KEYS = ("alpha_up", "alpha_down")

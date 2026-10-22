@@ -5,6 +5,18 @@
 model_id: mock
 prompt_version: reply_v3
 temperature: 0.3
-max_generated_turns: 4
 max_output_tokens: 1024
 random_seed: 544
+
+# How many turns to generate per conversation; both arms always get the same number.
+#   match_pair: longer real_turn_count in the attack/civil pair, minus this opening.
+#               Both conversations get the same transcript length, so length cannot
+#               predict the label. Partner is looked up among loaded examples; an
+#               unpaired conversation uses its own real_turn_count.
+#   match_real: this conversation's own real_turn_count minus the opening. Leaks the
+#               label (attack conversations end on the attack; length-only AUC 0.569).
+#   fixed:      max_generated_turns for every conversation; no length leak.
+turn_budget: match_pair
+max_generated_turns: 4
+# Floor when the real remaining length is 0: the simulator needs at least one turn.
+min_generated_turns: 1

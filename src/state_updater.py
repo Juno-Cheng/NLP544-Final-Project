@@ -18,6 +18,7 @@ object with .text and .metadata, i.e. the LLMClient protocol from src/llm_client
 """
 
 import json
+import logging
 import math
 from collections.abc import Callable
 from dataclasses import replace
@@ -39,6 +40,7 @@ from src.schemas import (
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "configs" / "updater.yaml"
 PROMPTS_DIR = ROOT / "prompts"
+LOGGER = logging.getLogger(__name__)
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -122,12 +124,26 @@ class TrustUpdater:
             raise ValueError("observed_turn must be the latest turn of visible_history")
 
         if config.condition == "static":
+            LOGGER.info(
+                "static: %s trust stays %.3f after turn %s",
+                current_state.speaker_id,
+                current_state.trust,
+                observed_turn.turn_id,
+            )
             return StateUpdateResult(current_state, current_state.trust)
         alpha_up, alpha_down = self.alphas_for(current_state.speaker_id)
         rating = self.rate(current_state.speaker_id, observed_turn, visible_history)
         alpha = alpha_down if rating < 0.5 else alpha_up
         # Rounding keeps float error from dropping trust just below a band edge (0.3999... vs 0.4).
         trust = round(min(1.0, max(0.0, current_state.trust + alpha * (rating - 0.5))), 6)
+        LOGGER.info(
+            "dynamic: %s trust %.3f -> %.3f (rating=%.3f, turn %s)",
+            current_state.speaker_id,
+            current_state.trust,
+            trust,
+            rating,
+            observed_turn.turn_id,
+        )
         return StateUpdateResult(replace(current_state, trust=trust), current_state.trust)
 
     def alphas_for(self, speaker_id: str) -> tuple[float, float]:
@@ -148,12 +164,14 @@ class TrustUpdater:
             raise ValueError("opening replay needs exactly two speakers")
         states = dict(states)
         config = UpdaterConfig("dynamic", self.version)
+        LOGGER.info("replaying %s opening turns", len(opening_turns))
         for index, turn in enumerate(opening_turns):
             if turn.speaker_id not in states:
                 raise ValueError(f"opening speaker {turn.speaker_id!r} has no state")
             receiver_id = next(speaker for speaker in states if speaker != turn.speaker_id)
             visible = list(opening_turns[: index + 1])
             states[receiver_id] = self.update_state(states[receiver_id], turn, visible, config).state
+        LOGGER.info("opening replay done: %s", {sid: round(state.trust, 3) for sid, state in states.items()})
         return states
 
     def rate(self, reader_id: str, observed_turn: DialogueTurn, visible_history: list[DialogueTurn]) -> float:

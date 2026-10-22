@@ -1,6 +1,7 @@
 """Persona-conditioned reply generation using the shared callable contract."""
 
 import json
+import logging
 import math
 import re
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from src.schemas import AgentState, DialogueTurn, GenerationConfig, from_dict, t
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 TRUST_BAND_PROMPTS = ("reply_v2", "reply_v3")
+LOGGER = logging.getLogger(__name__)
 
 
 class PersonaResponseGenerator:
@@ -81,10 +83,18 @@ class PersonaResponseGenerator:
         if config.prompt_version in TRUST_BAND_PROMPTS:
             payload_data["trust_level"] = describe_trust(actor.trust)
         payload = json.dumps(payload_data, ensure_ascii=False, allow_nan=False)
+        LOGGER.info(
+            "generating reply turn %s speaker=%s trust=%.3f prompt=%s",
+            ids[-1] + 1,
+            actor.speaker_id,
+            actor.trust,
+            config.prompt_version,
+        )
         completion = self._client.complete(instructions, payload, config)
         if not isinstance(completion.text, str) or not completion.text.strip():
             raise GenerationError("Model returned an empty or non-text reply")
         reply = DialogueTurn(ids[-1] + 1, actor.speaker_id, completion.text.strip())
+        LOGGER.info("got reply turn %s (%s chars)", reply.turn_id, len(reply.text))
         if self._on_generation is not None:
             self._on_generation(
                 {

@@ -75,7 +75,7 @@ NLP544-Final-Project/
 │   ├── raw/                     # untouched ConvoKit download
 │   └── processed/
 │       ├── seeds.jsonl          # ConversationSeed only: what agents may see
-│       └── labels.jsonl         # conversation_id → real_outcome, split, pair_id
+│       └── labels.jsonl         # conversation_id → real_outcome, split, pair_id, real_turn_count
 │
 ├── outputs/                     # gitignored; one folder per experiment run
 │   └── <experiment_id>/
@@ -206,6 +206,12 @@ trust; the simulator does that. With `reply_v2` and `reply_v3`, the payload incl
 so within-band changes are not lost. `reply_v3` (current) makes the band the only
 source of mood and tone; personas no longer carry a fixed temperament. `reply_v1`
 and `reply_v2` remain for older experiments.
+
+Each attack/civil pair shares one transcript length (`turn_budget: match_pair` in
+`configs/simulation.yaml`): both generate from the longer `real_turn_count` minus the
+opening, at least 1. Both arms of one conversation still get the same count. Length
+then cannot predict the label; `match_real` (own length) and `fixed` remain available.
+Re-run `scripts/prepare_data.py` if your `labels.jsonl` predates `real_turn_count`.
 
 Magnus's [recorded decisions](agents_docs/DECISIONS.md) start both speakers from a
 0.75 prior. With `replay_opening`, the runner rates each real opening turn once, from

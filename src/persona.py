@@ -7,6 +7,7 @@ Usage:
     describe_trust(states["Sirex98"].trust)       # {"level": "open", "behavior": "..."} for the reply prompt
 """
 
+import logging
 from copy import deepcopy
 from functools import cache
 from pathlib import Path
@@ -18,6 +19,7 @@ from src.schemas import AgentState, ConversationSeed, PersonaConfig, from_dict
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "configs" / "personas.yaml"
 ROLES = ("A", "B")
+LOGGER = logging.getLogger(__name__)
 
 
 @cache
@@ -49,7 +51,13 @@ def assign_personas(seed: ConversationSeed, by_role: dict[str, PersonaConfig]) -
     speakers = list(dict.fromkeys(turn.speaker_id for turn in seed.opening_turns))
     if len(speakers) != len(ROLES):
         raise ValueError(f"{seed.conversation_id} has {len(speakers)} speakers; personas need exactly 2")
-    return dict(zip(speakers, (by_role[role] for role in ROLES)))
+    assigned = dict(zip(speakers, (by_role[role] for role in ROLES)))
+    LOGGER.info(
+        "assigned personas for %s: %s",
+        seed.conversation_id,
+        {sid: cfg.persona_id for sid, cfg in assigned.items()},
+    )
+    return assigned
 
 
 def initialize_personas(configs: dict[str, PersonaConfig]) -> dict[str, AgentState]:

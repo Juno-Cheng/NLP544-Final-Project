@@ -12,6 +12,7 @@ Callback failures return a failed result with the dialogue completed so far;
 invalid setup raises TypeError or ValueError. Saving belongs to the experiment runner.
 """
 
+import logging
 from copy import deepcopy
 from dataclasses import replace
 from itertools import pairwise
@@ -19,6 +20,8 @@ from time import perf_counter
 from uuid import uuid4
 
 from src.persona import initialize_personas
+
+LOGGER = logging.getLogger(__name__)
 from src.schemas import (
     AgentState,
     ConversationSeed,
@@ -134,6 +137,13 @@ def run_simulation(
     speaker_id = next(speaker for speaker in speakers if speaker != transcript[-1].speaker_id)
     status = "ok"
     error = None
+    LOGGER.info(
+        "simulate %s condition=%s generate %s turns starting with %s",
+        seed.conversation_id,
+        config.condition,
+        config.max_generated_turns,
+        speaker_id,
+    )
 
     for _ in range(config.max_generated_turns):
         turn_id = transcript[-1].turn_id + 1
@@ -159,8 +169,10 @@ def run_simulation(
         except Exception as exc:  # noqa: BLE001 -- retain callback failures as inspectable run results.
             status = "failed"
             error = f"{stage} failed at turn {turn_id} after requesting {speaker_id!r}: {type(exc).__name__}: {exc}"
+            LOGGER.error("%s", error)
             break
 
+    LOGGER.info("simulate %s %s: %s generated turns", seed.conversation_id, config.condition, len(generated_turns))
     return SimulationResult(
         run_id=str(uuid4()) if run_id is None else run_id,
         conversation_id=seed.conversation_id,

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -73,6 +74,18 @@ SIMULATION_CONFIG = ROOT / "configs" / "simulation.yaml"
 JUDGE_CONFIG = ROOT / "configs" / "judge.yaml"
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "sample_labeled_examples.json"
 DEFAULT_OUTPUT_ROOT = ROOT / "outputs"
+LOGGER = logging.getLogger("run_experiment")
+
+
+def configure_terminal_logging() -> None:
+    """Print INFO logs from every pipeline module to the terminal."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+        force=True,
+    )
 
 # JudgeConfig has no temperature field. The judge call stays deterministic and short.
 JUDGE_TEMPERATURE = 0.0
@@ -99,6 +112,11 @@ class SimulationSettings:
     max_generated_turns: int
     max_output_tokens: int
     random_seed: int
+    turn_budget: str
+    min_generated_turns: int
+
+
+TURN_BUDGETS = ("fixed", "match_pair", "match_real")
 
 
 def load_simulation_settings(path: Path = SIMULATION_CONFIG) -> SimulationSettings:
@@ -118,7 +136,13 @@ def load_simulation_settings(path: Path = SIMULATION_CONFIG) -> SimulationSettin
         max_generated_turns=int(raw["max_generated_turns"]),
         max_output_tokens=int(raw["max_output_tokens"]),
         random_seed=int(raw["random_seed"]),
+        turn_budget=str(raw["turn_budget"]),
+        min_generated_turns=int(raw["min_generated_turns"]),
     )
+    if settings.turn_budget not in TURN_BUDGETS:
+        raise ValueError(f"turn_budget must be one of {TURN_BUDGETS}, got {settings.turn_budget!r}")
+    if settings.min_generated_turns <= 0:
+        raise ValueError("min_generated_turns must be positive")
     prompt_path = ROOT / "prompts" / f"{settings.prompt_version}.txt"
     if not prompt_path.is_file():
         raise ValueError(f"missing reply prompt {prompt_path}")
@@ -244,6 +268,36 @@ def make_judge(
     return make_llm_judge_callable(live, generation)
 
 
+def generated_turns_for(
+    example: LabeledExample,
+    settings: SimulationSettings,
+    counts_by_id: dict[str, int | None] | None = None,
+) -> int:
+    """Turns to generate for this conversation; the same number goes to both arms.
+
+    match_pair uses the longer real length in the attack/civil pair so length cannot
+    predict the label. The partner is looked up only among loaded examples.
+    """
+    if settings.turn_budget == "fixed":
+        return settings.max_generated_turns
+    if example.real_turn_count is None:
+        raise ValueError(
+            f"{example.seed.conversation_id} has no real_turn_count; re-run scripts/prepare_data.py"
+        )
+    target = example.real_turn_count
+    if settings.turn_budget == "match_pair" and example.pair_id:
+        counts = counts_by_id or {}
+        if example.pair_id in counts:
+            partner_count = counts[example.pair_id]
+            if partner_count is None:
+                raise ValueError(
+                    f"{example.pair_id} has no real_turn_count; re-run scripts/prepare_data.py"
+                )
+            target = max(target, partner_count)
+    remaining = target - len(example.seed.opening_turns)
+    return max(remaining, settings.min_generated_turns)
+
+
 def make_updater(
     personas: dict,
     model_id: str,
@@ -300,10 +354,10 @@ def run_arm(
     mode: str,
     live: OpenAILLMClient | None,
     calls_path: Path,
+    turns: int,
 ) -> SimulationResult:
-    """Run one condition. The simulator receives the seed, never the label."""
+    """Run one condition for `turns` generated turns. The simulator receives the seed, never the label."""
     run_id = f"{example.seed.conversation_id}-{condition}"
-    turns = settings.max_generated_turns
     # Arya: one reply client per arm so a mock cursor is not shared with the other condition.
     generator = PersonaResponseGenerator(
         _mock_client(MOCK_REPLIES, turns) if mode == "mock" else live,
@@ -324,7 +378,7 @@ def run_arm(
     config = SimulationConfig(
         condition,
         settings.model_id,
-        settings.max_generated_turns,
+        turns,
         settings.temperature,
         settings.max_output_tokens,
         settings.random_seed,
@@ -335,7 +389,7 @@ def run_arm(
         model_id=settings.model_id,
         prompt_version=settings.prompt_version,
         updater_version=updater_version,
-        max_generated_turns=settings.max_generated_turns,
+        max_generated_turns=turns,
         max_output_tokens=settings.max_output_tokens,
         temperature=settings.temperature,
         random_seed=settings.random_seed,
@@ -403,14 +457,7 @@ def run_experiment(
     if limit is not None and limit <= 0:
         raise ValueError("--limit must be positive")
     settings = load_simulation_settings()
-    settings = SimulationSettings(
-        model_id=resolve_model_id(mode, settings.model_id),
-        prompt_version=settings.prompt_version,
-        temperature=settings.temperature,
-        max_generated_turns=settings.max_generated_turns,
-        max_output_tokens=settings.max_output_tokens,
-        random_seed=settings.random_seed,
-    )
+    settings = replace(settings, model_id=resolve_model_id(mode, settings.model_id))
     judge_config = load_judge_config()
     judge_model_id = resolve_judge_model(mode, judge_config.judge_model_id)
     judge_config = JudgeConfig(
@@ -447,22 +494,43 @@ def run_experiment(
     }
     manifest_path = run_dir / "manifest.json"
     write_json(manifest_path, manifest)
+    LOGGER.info(
+        "start %s mode=%s source=%s model=%s prompt=%s updater=%s budget=%s",
+        experiment_id,
+        mode,
+        source,
+        settings.model_id,
+        settings.prompt_version,
+        updater_version,
+        settings.turn_budget,
+    )
 
     try:
         examples = load_examples(source)
         if limit is not None:
             examples = examples[:limit]
+        LOGGER.info("loaded %s conversations", len(examples))
         # Personas are loaded once. Each arm copies them into fresh trust state internally.
         persona_configs = load_persona_configs()
         live = build_live_client() if mode == "live" else None
         judge = make_judge(mode, live, judge_model_id, settings.random_seed)
         runs: list[SimulationResult] = []
         scores: list[EscalationScore] = []
+        counts_by_id = {
+            example.seed.conversation_id: example.real_turn_count for example in examples
+        }
 
-        for example in examples:
+        for index, example in enumerate(examples, start=1):
+            cid = example.seed.conversation_id
+            LOGGER.info("conversation %s/%s %s", index, len(examples), cid)
             # Magnus sees the opening only. real_outcome stays on the example until stage 5.
             personas = assign_personas(example.seed, persona_configs)
+            stage = "turn_budget"
             try:
+                # Pair length sizes both arms; it never reaches the generator or updater.
+                turns = generated_turns_for(example, settings, counts_by_id)
+                LOGGER.info("%s will generate %s turns", cid, turns)
+                stage = "opening_replay"
                 personas = start_personas(
                     example, personas, settings.model_id, mode, live, calls_path
                 )
@@ -471,13 +539,14 @@ def run_experiment(
                     append_jsonl(
                         events_path,
                         {
-                            "stage": "opening_replay",
+                            "stage": stage,
                             "conversation_id": example.seed.conversation_id,
                             "condition": condition,
                             "status": "failed",
                             "error": f"{type(exc).__name__}: {exc}",
                         },
                     )
+                LOGGER.error("%s %s failed: %s", cid, stage, exc)
                 continue
             append_jsonl(
                 events_path,
@@ -489,6 +558,7 @@ def run_experiment(
                 },
             )
             for condition in CONDITIONS:
+                LOGGER.info("%s running %s arm", cid, condition)
                 try:
                     result = run_arm(
                         example,
@@ -500,6 +570,7 @@ def run_experiment(
                         mode,
                         live,
                         calls_path,
+                        turns,
                     )
                 except Exception as exc:  # noqa: BLE001 -- one bad opening must not drop the rest.
                     append_jsonl(
@@ -512,6 +583,7 @@ def run_experiment(
                             "error": f"{type(exc).__name__}: {exc}",
                         },
                     )
+                    LOGGER.error("%s %s simulation failed: %s", cid, condition, exc)
                     continue
                 runs.append(result)
                 write_json(simulations_dir / f"{result.run_id}.json", to_dict(result))
@@ -527,11 +599,15 @@ def run_experiment(
                     },
                 )
                 if result.status != "ok":
+                    LOGGER.error("%s %s ended failed: %s", cid, condition, result.run_metadata.error)
                     continue
                 # Shadi's judge. Passing the transcript, not the LabeledExample, keeps the label out.
                 score = score_arm(result, judge_config, judge, judge_dir, events_path)
                 if score is not None:
                     scores.append(score)
+                    LOGGER.info("%s %s judged score=%.3f", cid, condition, score.score)
+                else:
+                    LOGGER.error("%s %s judge failed", cid, condition)
 
         scores_path = run_dir / "scores.jsonl"
         scores_path.write_text("", encoding="utf-8")
@@ -547,6 +623,7 @@ def run_experiment(
         summary = to_schema_summary(report)
         write_json(run_dir / "evaluation_report.json", report)
         write_json(run_dir / "evaluation.json", to_dict(summary))
+        LOGGER.info("wrote evaluation to %s", run_dir)
         manifest["status"] = "completed"
         manifest["n_examples"] = len(examples)
         manifest["n_runs"] = len(runs)
@@ -557,6 +634,7 @@ def run_experiment(
     except Exception:
         manifest["status"] = "failed"
         write_json(manifest_path, manifest)
+        LOGGER.error("experiment failed")
         raise
     return run_dir
 
@@ -570,6 +648,8 @@ def to_dict_settings(settings: SimulationSettings) -> dict[str, Any]:
         "max_generated_turns": settings.max_generated_turns,
         "max_output_tokens": settings.max_output_tokens,
         "random_seed": settings.random_seed,
+        "turn_budget": settings.turn_budget,
+        "min_generated_turns": settings.min_generated_turns,
     }
 
 
@@ -594,6 +674,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the experiment. Expected input errors print and return 1; artifacts stay on disk."""
+    configure_terminal_logging()
     try:
         args = parse_args(argv)
         run_dir = run_experiment(

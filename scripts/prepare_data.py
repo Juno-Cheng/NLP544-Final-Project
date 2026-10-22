@@ -7,7 +7,7 @@ Settings come from configs/data.yaml; --opening-turns overrides opening_turns fo
 
 Outputs (both gitignored):
     data/processed/seeds.jsonl   ConversationSeed records; no labels, no later turns
-    data/processed/labels.jsonl  conversation_id -> real_outcome, split, pair_id, ...
+    data/processed/labels.jsonl  conversation_id -> real_outcome, split, pair_id, real_turn_count, ...
 
 ============================================
 A seed (seeds.jsonl) is the start of a real conversation that the simulated agents continue. 
@@ -16,7 +16,8 @@ the speaker's username and the text.  A seed is everything the agents are allowe
 
 A label (labels.jsonl) is the answer key: did the real conversation end in a personal attack? 
 real_outcome is 1 for yes and 0 for no. The label record also stores the split (train/val/test), 
-pair_id (the matching civil or attack conversation) and a few audit fields.
+pair_id (the matching civil or attack conversation), real_turn_count (how many comments the
+real conversation had, used to size the simulation) and a few audit fields.
 
 ============================================
 
@@ -69,6 +70,12 @@ def opening_turns(convo, max_turns):
     return turns
 
 
+# Count the real conversation's comments, skipping section headers like opening_turns does.
+# Attack conversations end on the attack, so this count is label information.
+def real_turn_count(convo):
+    return sum(1 for utt in convo.iter_utterances() if not utt.meta.get("is_section_header"))
+
+
 # Save a list of dicts to a file, one JSON object per line.
 def write_jsonl(path, records):
     with path.open("w", encoding="utf-8") as f:
@@ -110,6 +117,7 @@ def main():
             "label_definition": LABEL_DEFINITION,
             "split": convo.meta.get("split"),
             "pair_id": convo.meta.get("pair_id"),
+            "real_turn_count": real_turn_count(convo),
             "verified": convo.meta.get("verified"),
             "annotation_year": convo.meta.get("annotation_year"),
             "page_id": convo.meta.get("page_id"),

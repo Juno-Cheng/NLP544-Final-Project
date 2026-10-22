@@ -12,6 +12,7 @@
     "label_definition": "conversation_has_personal_attack: any comment was judged to contain a personal attack",
     "split": "test",
     "pair_id": "example_001_civil",
-    "verified": true
+    "verified": true,
+    "real_turn_count": 6
   }
 ]

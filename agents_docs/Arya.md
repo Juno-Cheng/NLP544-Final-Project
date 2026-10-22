@@ -76,7 +76,7 @@ generate_reply(
 | `DialogueTurn`, `AgentState`, `GenerationConfig`, and `ResponseGenerator` definitions and serialization | Prakhar; Aditya for callback integration | Defined in Prakhar’s imported schemas; pending alignment commit `57d621d` is included locally. Do not duplicate shared schemas. |
 | Operational meaning of trust and how the prompt expresses it | Magnus + Arya | Magnus records modeled charity/cooperation and ten behavior bands in DECISIONS §F. `reply_v2` now consumes them; research validity remains unproven. |
 | Trust-update timing and seed-opening initialization | Magnus + Arya + Aditya | DECISIONS §F: receiver updates after each new generated message; both arms start from the trust obtained by rating the real opening once from a 0.75 prior (`trust_v4`, Oct 21). |
-| Whether both speakers update trust; fixed turn-taking and turn budget | Aditya + Arya + Magnus | Both receivers update in dynamic mode under DECISIONS §F. The turn budget is still supplied by the caller; six turns remains the suggested pilot budget. |
+| Whether both speakers update trust; fixed turn-taking and turn budget | Aditya + Arya + Magnus | Both receivers update in dynamic mode under DECISIONS §F. The turn budget now matches the longer real length in each attack/civil pair (`turn_budget: match_pair`, DECISIONS "Turn budget", Oct 21); `match_real` and `fixed` remain available. |
 | Suitable two-speaker seed structure | Jon; Aditya + Arya for simulation expectations | Jon validates real source data; unsuitable examples must not be silently rewritten. |
 | Model, prompt, parameter, failure, and usage-metadata handoff | Arya + Prakhar | Arya chooses runtime generation; Prakhar owns experiment configuration and saved artifacts. |
 

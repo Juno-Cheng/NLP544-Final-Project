@@ -126,6 +126,13 @@ Implemented in `src/persona.py`, `src/state_updater.py`, `configs/personas.yaml`
 
 All values are frozen once held-out testing starts; any change bumps `updater_version`.
 
+### Turn budget (owner: Prakhar, decided Oct 21)
+| Topic | Decision | Why |
+|---|---|---|
+| Length | `turn_budget: match_pair` in `configs/simulation.yaml`: both conversations in an attack/civil pair generate from the **longer** `real_turn_count` minus this opening, so they share a transcript length. Both arms of one conversation still get the same number. `prepare_data.py` writes `real_turn_count` to `labels.jsonl`; only the runner reads it, and it never reaches the generator, updater, or judge payload. An unpaired conversation (partner not loaded) uses its own length. `match_real` and `fixed` remain available. | Lengths stay realistic per talk-page pair, but a length-only predictor cannot tell attack from civil. |
+| Floor | `min_generated_turns: 1` when the remaining length is 0. | The simulator needs at least one generated turn. |
+| Leak closed | `match_real` copies the attack position and leaks the label (length-only AUC 0.569). `match_pair` assigns each length to one attack and one civil conversation, so that cue is gone. `fixed` is the stricter robustness check. | Report `match_pair` as the main setting; keep `fixed` as a check. |
+
 # Midterm Implementation Guide — What We Are Actually Building
 **CSCI 544 | October 13, 2026 | Informational companion, not a new specification**
 

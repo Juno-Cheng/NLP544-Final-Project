@@ -1,5 +1,6 @@
 """Injectable text clients for live GPT generation and deterministic offline tests."""
 
+import logging
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from typing import Any, Protocol
 from openai import APIError, OpenAI
 
 from src.schemas import GenerationConfig
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GenerationError(RuntimeError):
@@ -54,6 +57,7 @@ class OpenAILLMClient:
         if self._send_temperature:
             request["temperature"] = config.temperature
         started = perf_counter()
+        LOGGER.info("openai call model=%s prompt=%s", config.model_id, config.prompt_version)
         try:
             response = self._sdk.responses.create(**request)
         except APIError as exc:
@@ -76,6 +80,12 @@ class OpenAILLMClient:
         text = response.output_text.strip()
         if not text:
             raise GenerationError("OpenAI returned an empty reply")
+        LOGGER.info(
+            "openai done prompt=%s in %.0f ms (%s chars)",
+            config.prompt_version,
+            (perf_counter() - started) * 1000,
+            len(text),
+        )
         return Completion(
             text,
             {

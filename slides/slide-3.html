@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slide 3</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    font-family: "Avenir Next", "Segoe UI", sans-serif;
+    background: #f3f6f4;
+    color: #1c2b3a;
+  }
+  .slide { width: 1920px; height: 1080px; padding: 40px 64px 32px; position: relative; }
+  .bar { width: 72px; height: 8px; background: #16324f; margin-bottom: 12px; }
+  .kicker { font-size: 20px; letter-spacing: 0.14em; color: #5d6b78; font-weight: 600; }
+  h1 { font-size: 52px; color: #16324f; font-weight: 700; margin: 12px 0 26px; }
+  h2 { font-size: 20px; letter-spacing: 0.12em; color: #1a6b73; font-weight: 700; margin-bottom: 14px; }
+  .row { display: flex; align-items: stretch; gap: 14px; }
+  .card {
+    flex: 1; background: #fff; border: 2px solid #d5e0dc; border-radius: 14px;
+    padding: 22px 20px; text-align: center;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .card b { display: block; font-size: 28px; color: #16324f; line-height: 1.2; }
+  .card span { display: block; margin-top: 8px; font-size: 22px; color: #3e5163; line-height: 1.3; }
+  .arrow { align-self: center; color: #1a6b73; font-size: 36px; font-weight: 700; }
+  .loop { margin-top: 8px; }
+  .speak { background: #e7f0fb; border-color: #b9d0ee; }
+  .listen { background: #efe8fb; border-color: #d4c6ee; }
+  .swap { margin: 16px 0 28px; text-align: center; font-size: 24px; color: #1a6b73; font-weight: 650; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .arm { border-radius: 14px; padding: 22px 26px; }
+  .arm b { display: block; font-size: 28px; margin-bottom: 6px; }
+  .arm span { font-size: 24px; line-height: 1.3; }
+  .static { background: #e7f0fb; color: #1d4e89; }
+  .dynamic { background: #efe8fb; color: #5b3d91; }
+  .example {
+    margin-top: 22px; background: #fff; border: 2px solid #d5e0dc; border-radius: 14px;
+    padding: 18px 26px; font-size: 24px; line-height: 1.35; color: #243140;
+  }
+  .example b { color: #16324f; }
+  .foot { position: absolute; right: 64px; bottom: 24px; font-size: 18px; color: #5d6b78; }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="bar"></div>
+    <div class="kicker">CSCI 544 / TEAM 17 / HOW TRUST MOVES</div>
+    <h1>One conversation, two arms</h1>
+
+    <h2>ONCE, BEFORE EITHER ARM</h2>
+    <div class="row">
+      <div class="card"><b>Both start at 0.75</b><span>Same prior for A and B.</span></div>
+      <div class="arrow">→</div>
+      <div class="card"><b>Score the 3 real comments</b><span>Each person scores what the other wrote.</span></div>
+      <div class="arrow">→</div>
+      <div class="card"><b>Copy those two scores</b><span>Static and dynamic start identical.</span></div>
+    </div>
+
+    <h2 style="margin-top: 28px;">EVERY NEW MESSAGE</h2>
+    <div class="row loop">
+      <div class="card speak"><b>1. Speaker writes</b><span>Tone comes from their trust right now.</span></div>
+      <div class="arrow">→</div>
+      <div class="card"><b>2. Listener scores it</b><span>0 rude · 0.5 neutral · 1 kind.</span></div>
+      <div class="arrow">→</div>
+      <div class="card listen"><b>3. Only the listener moves</b><span>The speaker’s trust stays put.</span></div>
+    </div>
+    <p class="swap">Then they swap. The listener speaks next.</p>
+
+    <div class="split">
+      <div class="arm static"><b>Static</b><span>Same writers. Trust never moves again.</span></div>
+      <div class="arm dynamic"><b>Dynamic</b><span>This loop runs after every reply.</span></div>
+    </div>
+
+    <p class="example"><b>Why they don’t move together.</b> A sharp opening can leave B lower than A. A kind reply later lifts only the listener, and only a little, because trust falls faster than it rises.</p>
+    <div class="foot">3 / 3</div>
+  </div>
+</body>
+</html>

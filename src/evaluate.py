@@ -9,6 +9,7 @@ smoke tests: valid pairs are evaluated and all incomplete pairs are accounted
 for in ``excluded`` and ``coverage``. Structural corruption always raises.
 """
 
+import logging
 import math
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -17,6 +18,8 @@ from dataclasses import fields
 from typing import Any
 
 from src.schemas import EvaluationSummary, ExcludedPair, from_dict
+
+LOGGER = logging.getLogger(__name__)
 
 # These settings should match across arms, if recorded. The actual generated
 # text, condition, trust history, run_id, latency, and token usage may differ.
@@ -279,6 +282,14 @@ def evaluate_conditions(examples, runs, scores, *, on_incomplete="raise"):
         )
 
     n_examples = len(examples_by_id)
+    LOGGER.info(
+        "evaluate: %s examples, %s completed pairs, %s excluded; auc static=%s dynamic=%s",
+        n_examples,
+        len(paired),
+        len(excluded),
+        auc_static,
+        auc_dynamic,
+    )
     return {
         "pairs": paired,
         "excluded": excluded,
