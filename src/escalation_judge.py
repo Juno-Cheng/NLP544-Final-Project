@@ -89,6 +89,52 @@ def score_escalation(run_id, transcript, config, *, judge_callable=None):
     }
 
 
+def _turn_identity(turn):
+    record = _record(turn)
+    return (record.get("turn_id"), record.get("speaker_id"), record.get("text"))
+
+
+def transcript_views(transcript, generated_turns):
+    """Split one run into the full transcript, its opening, and its generated turns.
+
+    ``generated_turns`` must be the ordered tail of ``transcript``, as
+    ``SimulationResult`` stores them. The opening is every earlier turn.
+    View names are not added to the turns.
+    """
+    if not transcript:
+        raise ValueError("Cannot split an empty transcript")
+    generated = list(generated_turns)
+    if len(generated) > len(transcript):
+        raise ValueError("generated_turns is longer than transcript")
+    if generated and [
+        _turn_identity(turn) for turn in transcript[-len(generated) :]
+    ] != [_turn_identity(turn) for turn in generated]:
+        raise ValueError("generated_turns must be the ordered tail of transcript")
+    opening = list(transcript[: -len(generated)]) if generated else list(transcript)
+    if not opening:
+        raise ValueError("opening view is empty")
+    return {"full": list(transcript), "opening": opening, "generated": generated}
+
+
+def score_transcript_views(run_id, transcript, generated_turns, config, *, judge_callable=None):
+    """Score the full transcript, the opening alone, and the generated turns alone.
+
+    The same judge and rubric score each slice. The slice name is not sent to
+    the judge. All three records keep ``run_id``, so pass one slice at a time
+    to ``evaluate_conditions``. A run with no generated turns cannot be scored
+    this way. Use ``prompts/judge_rubric_v2.txt``: rubric v1 tells the judge
+    that the transcript is an opening plus a continuation, which is false for
+    a single slice.
+    """
+    views = transcript_views(transcript, generated_turns)
+    if not views["generated"]:
+        raise ValueError("Cannot score a generated-only view with no generated turns")
+    return {
+        name: score_escalation(run_id, turns, config, judge_callable=judge_callable)
+        for name, turns in views.items()
+    }
+
+
 def make_llm_judge_callable(client, generation_config):
     """Connect the shared LLM client to the blind escalation judge."""
 

@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from src.escalation_judge import build_judge_prompt, score_escalation
+from src.escalation_judge import (
+    build_judge_prompt,
+    score_escalation,
+    score_transcript_views,
+)
 
 
 def test_judge_is_blind():
@@ -158,6 +162,86 @@ def test_shared_llm_client_adapter():
     assert '"condition"' not in client.payloads[0]
     assert '"real_outcome"' not in client.payloads[0]
     assert '"trust"' not in client.payloads[0]
+
+
+def _slice_config():
+    prompts = []
+
+    def judge(prompt):
+        prompts.append(prompt)
+        return json.dumps({"score": [0.9, 0.7, 0.1][len(prompts) - 1]})
+
+    return prompts, {
+        "judge_model_id": "mock-judge",
+        "rubric_version": "v2",
+        "rubric_path": "prompts/judge_rubric_v2.txt",
+        "judge_callable": judge,
+    }
+
+
+def test_scores_opening_and_generated_turns_as_separate_views():
+    from src.schemas import DialogueTurn
+
+    opening = [
+        DialogueTurn(0, "Sirex98", "Your edit shows you do not understand this topic."),
+        DialogueTurn(1, "Jayjg", "Which sentence do you mean?"),
+    ]
+    generated = [
+        DialogueTurn(2, "Sirex98", "I mean the second sentence. Here is a source."),
+        DialogueTurn(3, "Jayjg", "Thanks. I will check that source."),
+    ]
+    prompts, config = _slice_config()
+
+    scored = score_transcript_views("run-1", opening + generated, generated, config)
+
+    assert [item["score"] for item in scored.values()] == [0.9, 0.7, 0.1]
+    assert {item["run_id"] for item in scored.values()} == {"run-1"}
+    assert len(prompts) == 3
+    full, opening_prompt, generated_prompt = prompts
+    assert "do not understand this topic" in full
+    assert "I will check that source" in full
+    assert "do not understand this topic" in opening_prompt
+    assert "I will check that source" not in opening_prompt
+    assert "do not understand this topic" not in generated_prompt
+    assert "I will check that source" in generated_prompt
+    for prompt in prompts:
+        for forbidden in (
+            '"condition"',
+            '"real_outcome"',
+            '"trust"',
+            "static",
+            "dynamic",
+            "opening-only",
+            "generated-only",
+        ):
+            assert forbidden not in prompt
+        assert "opening plus simulated continuation" not in prompt
+
+
+def test_rejects_generated_view_with_no_generated_turns():
+    prompts, config = _slice_config()
+    with pytest.raises(ValueError, match="no generated turns"):
+        score_transcript_views(
+            "run-1",
+            [{"speaker_id": "A", "text": "Hello there."}],
+            [],
+            config,
+        )
+    assert prompts == []
+
+
+def test_rejects_generated_turns_that_are_not_the_tail():
+    _, config = _slice_config()
+    with pytest.raises(ValueError, match="ordered tail"):
+        score_transcript_views(
+            "run-1",
+            [
+                {"speaker_id": "A", "text": "Hello there."},
+                {"speaker_id": "B", "text": "I disagree with the wording."},
+            ],
+            [{"speaker_id": "A", "text": "A different reply."}],
+            config,
+        )
 
 
 @pytest.mark.parametrize("invalid_callback", [False, "invalid", 123])

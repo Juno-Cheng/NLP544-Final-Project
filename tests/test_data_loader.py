@@ -1,8 +1,8 @@
 """Tests for src/data_loader.py.
 
 Most tests use a small fake dataset written to a temp folder, so they run offline.
-The last test checks the real data with configs/data.yaml and is skipped until
-`python scripts/prepare_data.py` has been run.
+The real-data tests use configs/data.yaml and configs/validation_sample.yaml.
+They are skipped until `python scripts/prepare_data.py` has been run.
 
 Fake dataset (pair = one attack + one civil conversation):
     p1-p4  test split, 2 speakers, verified       -> always kept
@@ -13,8 +13,10 @@ Fake dataset (pair = one attack + one civil conversation):
 """
 
 import json
+from pathlib import Path
 
 import pytest
+import yaml
 
 from src.data_loader import (
     complete_pairs,
@@ -30,6 +32,7 @@ from src.data_loader import (
     seeds_only,
 )
 
+ROOT = Path(__file__).resolve().parents[1]
 SEED_KEYS = {"conversation_id", "source", "opening_turns"}
 EXAMPLE_KEYS = {"seed", "real_outcome", "label_definition", "split", "pair_id", "verified"}
 
@@ -238,3 +241,38 @@ def test_real_data_with_project_config():
     if config["keep_pairs"]:
         outcomes = [e["real_outcome"] for e in result]
         assert outcomes.count(0) == outcomes.count(1)
+
+
+def test_validation_sample_is_twenty_balanced_val_pairs():
+    """The frozen validation list is the seed-544 draw and stays off the test sample."""
+    raw = yaml.safe_load(
+        (ROOT / "configs" / "validation_sample.yaml").read_text(encoding="utf-8")
+    )
+    assert raw["splits"] == ["val"]
+    assert raw["sample_size"] == 40
+    assert raw["keep_pairs"] is True
+    assert raw["random_seed"] == 544
+    base = load_config()
+    draw_config = {
+        **base,
+        "splits": raw["splits"],
+        "sample_size": raw["sample_size"],
+        "keep_pairs": raw["keep_pairs"],
+        "random_seed": raw["random_seed"],
+        "min_speakers": raw["min_speakers"],
+        "max_speakers": raw["max_speakers"],
+        "min_opening_turns": raw["min_opening_turns"],
+        "verified_only": raw["verified_only"],
+    }
+    try:
+        drawn = load_and_prepare("cga-wiki", draw_config)
+    except FileNotFoundError:
+        pytest.skip("run scripts/prepare_data.py first")
+    drawn_ids = [example["seed"]["conversation_id"] for example in drawn]
+    assert drawn_ids == raw["conversation_ids"]
+    assert len(drawn_ids) == 40
+    assert [example["real_outcome"] for example in drawn].count(0) == 20
+    assert all(example["split"] == "val" for example in drawn)
+    assert all(example["pair_id"] in set(drawn_ids) for example in drawn)
+    test_ids = {example["seed"]["conversation_id"] for example in load_and_prepare("cga-wiki", base)}
+    assert set(drawn_ids).isdisjoint(test_ids)
