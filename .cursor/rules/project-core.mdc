@@ -1,31 +1,30 @@
 ---
-description: Project context and non-negotiable experiment safeguards for the static vs. dynamic personas project
+description: Project context and non-negotiable experiment safeguards for the static vs. dynamic trust project
 alwaysApply: true
 ---
 
 # Project Core Rules
 
-CSCI 544 project: paired static/dynamic LLM persona simulations on CGA-WIKI openings, scored by a blind judge and compared to real personal-attack labels. `SPEC.md` is the source of truth; `DECISIONS.md` records what the team has agreed.
+CSCI 544 project: two separate experiments, static trust and dynamic trust, continue the same CGA-WIKI openings with personas A and B. A blind judge marks each conversation 0 or 1, which is compared with the real personal-attack label. `docs/DECISIONS.md` section G records the agreed design; `README.md` describes the pipeline.
 
 ## Information flow (never violate)
 
-- Only `src/evaluate.py` may read real labels (`data/processed/labels.jsonl`, `real_outcome`).
-- Generator and state updater see only `ConversationSeed` turns and generated turns — never labels or future human turns.
-- Judge input is ordered dialogue text plus the rubric only. No condition name, trust values, model provenance, or labels.
-- Static and dynamic runs share seed, personas, model, turn budget, and generation settings. Only the update policy differs.
+- Only the comparison step (`evaluate_run` in `src/trustsim/pipeline.py` and `src/trustsim/evaluation/`) reads real labels. Simulation and judging receive `Seed` objects, never `Example` or `Label`.
+- Agents and the critic see only the conversation so far: never labels, later human turns, or which experiment they are in. Agents are not shown their trust value; the critic never sees trust.
+- Judge input is the conversation text with speakers renamed Editor 1 and Editor 2, plus the fixed prompt. No experiment name, trust, persona, model id, or label.
+- Static and dynamic share openings, personas, starting trust, models, prompts, turn limit, and judge. Only whether trust moves differs.
 
 ## Where things live
 
-- Shared types come from `src/schemas.py`. Do not redefine `DialogueTurn`, `AgentState`, etc. in other modules.
-- One module per owner in `src/`; don't edit another owner's module without saying so.
-- Tunable parameters go in `configs/*.yaml`, prompt text in `prompts/*_vN.txt`. No hardcoded prompts or magic numbers in code.
-- Entry points live in `scripts/`; `src/` modules don't run anything on import.
-- Notebooks are for exploration only; anything the pipeline depends on belongs in `src/` or `scripts/`.
+- Shared types: `trustsim.dialogue` (`Turn`, `Seed`) and `trustsim.data.loader` (`Label`, `Example`). Do not redefine them.
+- One folder per pipeline stage under `src/trustsim/`: `data`, `personas`, `simulation`, `judge`, `evaluation`, plus `llm` for model access.
+- Tunable values go in `configs/*.yaml`, prompt text in `prompts/*_vN.txt`. No hardcoded prompts or magic numbers in code.
+- Entry points live in `scripts/`; package modules do not run anything on import.
 
 ## Safety and reproducibility
 
-- Never commit or log API keys; read them from `.env` via environment variables.
+- Never commit or log API keys; read them from environment variables.
 - Never commit `data/raw/`, `data/processed/`, or `outputs/`.
-- Log failed runs with a status and error; never silently drop them.
-- Record model id, prompt version, updater version, and random seed in `run_metadata`.
-- Pin new dependencies in `requirements.txt` as `name==version`. Target Python 3.13.
+- A failed conversation is saved with its status and error and retried on the next run; never drop it silently.
+- Each run's `run.json` records settings, prompt hashes, git commit, and token usage. A run folder cannot be resumed with different settings.
+- Pin new dependencies as `name==version` in `requirements.txt` and `pyproject.toml`. Target Python 3.12+.

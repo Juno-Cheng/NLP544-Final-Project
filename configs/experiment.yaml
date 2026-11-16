@@ -1,0 +1,53 @@
+# Settings shared by both experiments. The only difference between static and dynamic is
+# whether trust moves; models, prompts, personas, and turn limit are identical.
+
+experiments: [static, dynamic]
+
+# Generated turns after the real opening (5 per agent). A conversation ends earlier if an
+# agent walks away; its leaving message is the last turn.
+max_turns: 10
+
+# Conversations simulated at the same time. Raise it if your API rate limit allows.
+workers: 1
+
+# Times to ask a model again when its answer is unusable (refused, cut off, or not in the
+# role's JSON format) before that conversation is recorded as failed.
+attempts_per_answer: 3
+
+llm:
+  # openai or gemini (--provider); --mock replaces it with an offline mock model.
+  provider: openai
+  providers:
+    openai:
+      base_url: null
+      api_key_env: OPENAI_API_KEY
+      token_limit_param: max_completion_tokens
+    gemini:
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+      api_key_env: GEMINI_API_KEY
+      token_limit_param: max_tokens
+  max_retries: 5         # the SDK's own retries for rate limits, timeouts, and server errors
+  timeout_seconds: 120
+
+  # One model per role; --model sets all three at once. max_output_tokens includes any
+  # reasoning tokens. temperature and reasoning_effort are sent only when set: gpt-5.5
+  # rejects any temperature, so leave it null for that model.
+  roles:
+    agent:
+      model: gpt-5.5
+      prompt: prompts/agent_reply_v1.txt
+      max_output_tokens: 2048
+      temperature: null
+      reasoning_effort: null
+    critic:
+      model: gpt-5.5
+      prompt: prompts/critic_v1.txt
+      max_output_tokens: 1024
+      temperature: null
+      reasoning_effort: null
+    judge:
+      model: gpt-5.5
+      prompt: prompts/judge_v1.txt
+      max_output_tokens: 2048
+      temperature: null
+      reasoning_effort: null

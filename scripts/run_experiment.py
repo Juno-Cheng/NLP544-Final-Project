@@ -1,698 +1,112 @@
-"""Run one paired static/dynamic experiment and save every artifact.
-
-Stages, in order:
-    1. Jon's load_and_prepare, or the committed fixture, supplies LabeledExample rows.
-    2. Magnus's assign_personas maps each opening onto roles A and B. The seed is all it sees.
-       When configs/updater.yaml sets replay_opening, the rater reads the real opening once
-       and both arms start from the resulting trust.
-    3. Aditya's run_simulation runs twice per seed. Arya's PersonaResponseGenerator writes
-       replies and Magnus's TrustUpdater applies the condition. Both arms share the settings
-       in configs/simulation.yaml.
-    4. Shadi's score_escalation scores each successful transcript. The payload is dialogue
-       text only: no condition, trust, model id, or label.
-    5. Shadi's evaluate_conditions joins the held-out labels, then to_schema_summary
-       validates the shared EvaluationSummary.
+"""Run the static and dynamic experiments, judge every conversation blind, and compare the
+verdicts with the dataset's real outcomes.
 
 Usage:
-    python scripts/run_experiment.py --mode mock --limit 1
-    python scripts/run_experiment.py --mode live --limit 5
+    python scripts/run_experiment.py --run-name dry-run --mock
+    python scripts/run_experiment.py --run-name pilot-20
+    python scripts/run_experiment.py --run-name pilot-20 --provider gemini --model <model id>
 
-Mock mode uses canned replies and tests/fixtures/sample_labeled_examples.json.
-Live mode calls OpenAI and reads data/processed through configs/data.yaml.
-Set OPENAI_API_KEY yourself; this script does not load .env.
+Settings: configs/data.yaml, configs/personas.yaml, configs/experiment.yaml. A live run reads
+its API key from the environment variable named for the provider in configs/experiment.yaml
+(OPENAI_API_KEY or GEMINI_API_KEY); --mock needs no key and makes no network calls.
 
-Outputs under outputs/<experiment_id>/:
-    manifest.json, simulations/, judge_inputs/, scores.jsonl,
-    evaluation.json, evaluation_report.json, logs/events.jsonl, logs/model_calls.jsonl
+Running again with the same --run-name resumes: finished conversations are kept and failed
+ones are retried. Outputs go to outputs/<run-name>/: run.json, simulations.jsonl,
+verdicts.jsonl, metrics.json, results.csv, summary.md, and run.log.
 """
 
-from __future__ import annotations
-
 import argparse
-import json
 import logging
-import os
-import subprocess
+import re
 import sys
-from copy import deepcopy
-from datetime import datetime, timezone
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
-from hashlib import sha256
-from itertools import cycle, islice
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+
+from trustsim.config import (
+    EXPERIMENTS,
+    MOCK_PROVIDER,
+    ConfigError,
+    check_sample_size,
+    load_data_settings,
+    load_experiment_settings,
+    with_overrides,
+)
+from trustsim.data.loader import load_examples
+from trustsim.llm.client import LLMSetupError, UsageMeter
+from trustsim.llm.factory import build_clients
+from trustsim.personas.cast import load_cast
+from trustsim.pipeline import SUMMARY, RunMismatchError, build_roles, run_pipeline
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-import yaml
-
-from src.data_loader import load_and_prepare
-from src.escalation_judge import make_llm_judge_callable, score_escalation
-from src.evaluate import evaluate_conditions, to_schema_summary
-from src.llm_client import MockLLMClient, OpenAILLMClient
-from src.persona import assign_personas, initialize_personas, load_persona_configs
-from src.response_generator import PersonaResponseGenerator
-from src.schemas import (
-    CONDITIONS,
-    EscalationScore,
-    GenerationConfig,
-    JudgeConfig,
-    LabeledExample,
-    RunMetadata,
-    SimulationConfig,
-    SimulationResult,
-    from_dict,
-    to_dict,
-)
-from src.simulator import run_simulation
-from src.state_updater import TrustUpdater, load_config as load_updater_config, sensitivity_by_speaker
-
-SIMULATION_CONFIG = ROOT / "configs" / "simulation.yaml"
-JUDGE_CONFIG = ROOT / "configs" / "judge.yaml"
-FIXTURE_PATH = ROOT / "tests" / "fixtures" / "sample_labeled_examples.json"
-DEFAULT_OUTPUT_ROOT = ROOT / "outputs"
+CONFIG_DIR = ROOT / "configs"
+OUTPUT_DIR = ROOT / "outputs"
+RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 LOGGER = logging.getLogger("run_experiment")
 
 
-def configure_terminal_logging() -> None:
-    """Print INFO logs from every pipeline module to the terminal."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stderr,
-        force=True,
-    )
-
-# JudgeConfig has no temperature field. The judge call stays deterministic and short.
-JUDGE_TEMPERATURE = 0.0
-JUDGE_MAX_OUTPUT_TOKENS = 1024
-# Neutral canned replies. Ratings of 0.5 leave dynamic trust unchanged. The judge score
-# is fixed and is never taken from the held-out label.
-MOCK_REPLIES = (
-    "Could you point me to the source for that change?",
-    "The sentence did not match the cited reference, so I removed it.",
-    "I can restore it if we add a reliable source.",
-    "Let us check the policy page and adjust the wording.",
-)
-MOCK_RATINGS = ("0.5",)
-MOCK_JUDGE_RESPONSE = '{"score": 0.5}'
-
-
-@dataclass(frozen=True)
-class SimulationSettings:
-    """Fields of configs/simulation.yaml. Both arms receive this same generation setup."""
-
-    model_id: str
-    prompt_version: str
-    temperature: float
-    max_generated_turns: int
-    max_output_tokens: int
-    random_seed: int
-    turn_budget: str
-    min_generated_turns: int
-
-
-TURN_BUDGETS = ("fixed", "match_pair", "match_real")
-
-
-def load_simulation_settings(path: Path = SIMULATION_CONFIG) -> SimulationSettings:
-    """Return the shared generation settings, rejecting a missing or mistyped field."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path} must be a mapping")
-    known = set(SimulationSettings.__dataclass_fields__)
-    unexpected = sorted(set(raw) - known)
-    missing = sorted(known - set(raw))
-    if unexpected or missing:
-        raise ValueError(f"{path} fields mismatch; unexpected={unexpected} missing={missing}")
-    settings = SimulationSettings(
-        model_id=str(raw["model_id"]),
-        prompt_version=str(raw["prompt_version"]),
-        temperature=float(raw["temperature"]),
-        max_generated_turns=int(raw["max_generated_turns"]),
-        max_output_tokens=int(raw["max_output_tokens"]),
-        random_seed=int(raw["random_seed"]),
-        turn_budget=str(raw["turn_budget"]),
-        min_generated_turns=int(raw["min_generated_turns"]),
-    )
-    if settings.turn_budget not in TURN_BUDGETS:
-        raise ValueError(f"turn_budget must be one of {TURN_BUDGETS}, got {settings.turn_budget!r}")
-    if settings.min_generated_turns <= 0:
-        raise ValueError("min_generated_turns must be positive")
-    prompt_path = ROOT / "prompts" / f"{settings.prompt_version}.txt"
-    if not prompt_path.is_file():
-        raise ValueError(f"missing reply prompt {prompt_path}")
-    if not 0 <= settings.temperature <= 2:
-        raise ValueError("temperature must be between 0 and 2")
-    if settings.max_generated_turns <= 0:
-        raise ValueError("max_generated_turns must be positive")
-    if settings.max_output_tokens < 16:
-        raise ValueError("max_output_tokens must be at least 16")
-    return settings
-
-
-def load_judge_config(path: Path = JUDGE_CONFIG) -> JudgeConfig:
-    """Return the rubric settings. The callable is attached later and is not in the yaml."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path} must be a mapping")
-    return from_dict(JudgeConfig, raw)
-
-
-def load_examples(source: str) -> list[LabeledExample]:
-    """Load labeled rows. Processed data is Jon's loader; fixture is the committed sample."""
-    if source == "fixture":
-        rows = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-    elif source == "processed":
-        try:
-            rows = load_and_prepare()
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(
-                "Processed seeds are missing. Run python scripts/prepare_data.py first."
-            ) from exc
-    else:
-        raise ValueError("source must be 'fixture' or 'processed'")
-    if not isinstance(rows, list) or not rows:
-        raise ValueError(f"{source} source produced no examples")
-    return [from_dict(LabeledExample, row) for row in rows]
-
-
-def resolve_model_id(mode: str, configured: str) -> str:
-    """Keep the yaml model in mock mode. Live mode prefers OPENAI_MODEL."""
-    if mode == "mock":
-        return configured
-    model_id = os.environ.get("OPENAI_MODEL") or configured
-    if not model_id or model_id == "mock":
-        raise RuntimeError(
-            "live mode needs OPENAI_MODEL or a real model_id in configs/simulation.yaml"
-        )
-    return model_id
-
-
-def resolve_judge_model(mode: str, configured: str) -> str:
-    """Refuse the mock judge id once the run is calling a live model."""
-    if mode == "live" and configured in {"", "mock", "mock-judge"}:
-        raise RuntimeError("live mode needs a real judge_model_id in configs/judge.yaml")
-    return configured
-
-
-def current_commit() -> str | None:
-    """Return HEAD when git is available. A missing commit does not stop the run."""
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return completed.stdout.strip() or None
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Write one UTF-8 JSON document."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
-    """Append one UTF-8 JSON object. Failed runs are recorded here rather than dropped."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
-
-
-def _mock_client(lines: Iterable[str], count: int) -> MockLLMClient:
-    return MockLLMClient(islice(cycle(lines), count))
-
-
-def live_updater_settings() -> dict:
-    """Copy the updater config and give the rater room for reasoning tokens."""
-    settings = deepcopy(load_updater_config())
-    settings["rater"]["max_output_tokens"] = max(int(settings["rater"]["max_output_tokens"]), 1024)
-    return settings
-
-
-def build_live_client() -> OpenAILLMClient:
-    """Open one OpenAI client. Credentials stay in the environment."""
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("live mode needs OPENAI_API_KEY in the environment")
-    from openai import OpenAI
-
-    # gpt-5.5 reasons by default and rejects a temperature field.
-    return OpenAILLMClient(OpenAI(), send_temperature=False)
-
-
-def make_judge(
-    mode: str, live: OpenAILLMClient | None, judge_model_id: str, random_seed: int
-) -> Callable[[str], str]:
-    """Return the function score_escalation calls. Mock mode never touches the network."""
-    if mode == "mock":
-        return lambda _prompt: MOCK_JUDGE_RESPONSE
-    if live is None:
-        raise RuntimeError("live mode is missing its OpenAI client")
-    generation = GenerationConfig(
-        judge_model_id,
-        JUDGE_TEMPERATURE,
-        JUDGE_MAX_OUTPUT_TOKENS,
-        "judge_rubric_v1",
-        random_seed,
-    )
-    return make_llm_judge_callable(live, generation)
-
-
-def generated_turns_for(
-    example: LabeledExample,
-    settings: SimulationSettings,
-    counts_by_id: dict[str, int | None] | None = None,
-) -> int:
-    """Turns to generate for this conversation; the same number goes to both arms.
-
-    match_pair uses the longer real length in the attack/civil pair so length cannot
-    predict the label. The partner is looked up only among loaded examples.
-    """
-    if settings.turn_budget == "fixed":
-        return settings.max_generated_turns
-    if example.real_turn_count is None:
-        raise ValueError(
-            f"{example.seed.conversation_id} has no real_turn_count; re-run scripts/prepare_data.py"
-        )
-    target = example.real_turn_count
-    if settings.turn_budget == "match_pair" and example.pair_id:
-        counts = counts_by_id or {}
-        if example.pair_id in counts:
-            partner_count = counts[example.pair_id]
-            if partner_count is None:
-                raise ValueError(
-                    f"{example.pair_id} has no real_turn_count; re-run scripts/prepare_data.py"
-                )
-            target = max(target, partner_count)
-    remaining = target - len(example.seed.opening_turns)
-    return max(remaining, settings.min_generated_turns)
-
-
-def make_updater(
-    personas: dict,
-    model_id: str,
-    mode: str,
-    live: OpenAILLMClient | None,
-    rating_count: int,
-    on_rating: Callable[[dict[str, Any]], None],
-) -> TrustUpdater:
-    """Trust updater with each speaker's persona sensitivity. Mock ratings are neutral."""
-    return TrustUpdater(
-        _mock_client(MOCK_RATINGS, rating_count) if mode == "mock" else live,
-        model_id,
-        None if mode == "mock" else live_updater_settings(),
-        sensitivity=sensitivity_by_speaker(personas),
-        on_rating=on_rating,
-    )
-
-
-def start_personas(
-    example: LabeledExample,
-    personas: dict,
-    model_id: str,
-    mode: str,
-    live: OpenAILLMClient | None,
-    calls_path: Path,
-) -> dict:
-    """Personas whose initial_trust is the trust after rating the real opening, shared by both arms."""
-    opening = example.seed.opening_turns
-    pair_id = f"pair-{example.seed.conversation_id}"
-    updater = make_updater(
-        personas,
-        model_id,
-        mode,
-        live,
-        len(opening),
-        lambda event: append_jsonl(calls_path, {**event, "run_id": pair_id, "stage": "opening_rating"}),
-    )
-    if not updater.replay_opening_enabled:
-        return personas
-    states = updater.replay_opening(initialize_personas(personas), opening)
-    return {
-        speaker_id: replace(persona, initial_trust=states[speaker_id].trust)
-        for speaker_id, persona in personas.items()
-    }
-
-
-def run_arm(
-    example: LabeledExample,
-    personas: dict,
-    condition: str,
-    settings: SimulationSettings,
-    updater_version: str,
-    experiment_id: str,
-    mode: str,
-    live: OpenAILLMClient | None,
-    calls_path: Path,
-    turns: int,
-) -> SimulationResult:
-    """Run one condition for `turns` generated turns. The simulator receives the seed, never the label."""
-    run_id = f"{example.seed.conversation_id}-{condition}"
-    # Arya: one reply client per arm so a mock cursor is not shared with the other condition.
-    generator = PersonaResponseGenerator(
-        _mock_client(MOCK_REPLIES, turns) if mode == "mock" else live,
-        on_generation=lambda event: append_jsonl(
-            calls_path, {**event, "run_id": run_id, "stage": "reply"}
-        ),
-    )
-    # Magnus: static trust never calls the rater. Dynamic trust uses updater.yaml and each
-    # persona's trust_sensitivity.
-    updater = make_updater(
-        personas,
-        settings.model_id,
-        mode,
-        live,
-        turns,
-        lambda event: append_jsonl(calls_path, {**event, "run_id": run_id, "stage": "rating"}),
-    )
-    config = SimulationConfig(
-        condition,
-        settings.model_id,
-        turns,
-        settings.temperature,
-        settings.max_output_tokens,
-        settings.random_seed,
-    )
-    metadata = RunMetadata(
-        experiment_id=experiment_id,
-        paired_run_id=f"pair-{example.seed.conversation_id}",
-        model_id=settings.model_id,
-        prompt_version=settings.prompt_version,
-        updater_version=updater_version,
-        max_generated_turns=turns,
-        max_output_tokens=settings.max_output_tokens,
-        temperature=settings.temperature,
-        random_seed=settings.random_seed,
-    )
-    # Aditya: opening turns do not update trust. A callback failure is a saved result.
-    return run_simulation(
-        example.seed,
-        personas,
-        config,
-        generator,
-        updater,
-        run_metadata=metadata,
-        run_id=run_id,
-    )
-
-
-def score_arm(
-    result: SimulationResult,
-    judge_config: JudgeConfig,
-    judge: Callable[[str], str],
-    judge_dir: Path,
-    events_path: Path,
-) -> EscalationScore | None:
-    """Score one successful transcript. The prompt saved here is the exact judge input."""
-    captured: dict[str, str] = {}
-
-    def recording_judge(prompt: str) -> str:
-        captured["prompt"] = prompt
-        (judge_dir / f"{result.run_id}.txt").write_text(prompt, encoding="utf-8")
-        return judge(prompt)
-
-    try:
-        raw = score_escalation(
-            result.run_id,
-            result.transcript,
-            judge_config,
-            judge_callable=recording_judge,
-        )
-        return from_dict(EscalationScore, raw)
-    except Exception as exc:  # noqa: BLE001 -- keep the transcript and record the judge failure.
-        append_jsonl(
-            events_path,
-            {
-                "stage": "judge",
-                "run_id": result.run_id,
-                "status": "failed",
-                "error": f"{type(exc).__name__}: {exc}",
-                "prompt_saved": "prompt" in captured,
-            },
-        )
-        return None
-
-
-def run_experiment(
-    *,
-    mode: str,
-    limit: int | None,
-    experiment_id: str,
-    source: str,
-    output_root: Path,
-) -> Path:
-    """Execute both arms for each example and write the experiment directory."""
-    if mode not in {"mock", "live"}:
-        raise ValueError("mode must be 'mock' or 'live'")
-    if limit is not None and limit <= 0:
-        raise ValueError("--limit must be positive")
-    settings = load_simulation_settings()
-    settings = replace(settings, model_id=resolve_model_id(mode, settings.model_id))
-    judge_config = load_judge_config()
-    judge_model_id = resolve_judge_model(mode, judge_config.judge_model_id)
-    judge_config = JudgeConfig(
-        judge_model_id, judge_config.rubric_version, judge_config.rubric_path
-    )
-
-    run_dir = output_root / experiment_id
-    if run_dir.exists():
-        raise FileExistsError(f"experiment directory already exists: {run_dir}")
-    simulations_dir = run_dir / "simulations"
-    judge_dir = run_dir / "judge_inputs"
-    events_path = run_dir / "logs" / "events.jsonl"
-    calls_path = run_dir / "logs" / "model_calls.jsonl"
-    for path in (simulations_dir, judge_dir, events_path.parent):
-        path.mkdir(parents=True)
-
-    # Version comes from Magnus's updater, which reads configs/updater.yaml.
-    updater_version = TrustUpdater(MockLLMClient(()), settings.model_id).version
-    prompt_sha = sha256((ROOT / "prompts" / f"{settings.prompt_version}.txt").read_bytes()).hexdigest()
-    rubric_sha = sha256((ROOT / judge_config.rubric_path).read_bytes()).hexdigest()
-    manifest: dict[str, Any] = {
-        "experiment_id": experiment_id,
-        "status": "running",
-        "mode": mode,
-        "source": source,
-        "git_commit": current_commit(),
-        "limit": limit,
-        "simulation": to_dict_settings(settings),
-        "judge_model_id": judge_model_id,
-        "rubric_version": judge_config.rubric_version,
-        "updater_version": updater_version,
-        "prompt_sha256": prompt_sha,
-        "rubric_sha256": rubric_sha,
-    }
-    manifest_path = run_dir / "manifest.json"
-    write_json(manifest_path, manifest)
-    LOGGER.info(
-        "start %s mode=%s source=%s model=%s prompt=%s updater=%s budget=%s",
-        experiment_id,
-        mode,
-        source,
-        settings.model_id,
-        settings.prompt_version,
-        updater_version,
-        settings.turn_budget,
-    )
-
-    try:
-        examples = load_examples(source)
-        if limit is not None:
-            examples = examples[:limit]
-        LOGGER.info("loaded %s conversations", len(examples))
-        # Personas are loaded once. Each arm copies them into fresh trust state internally.
-        persona_configs = load_persona_configs()
-        live = build_live_client() if mode == "live" else None
-        judge = make_judge(mode, live, judge_model_id, settings.random_seed)
-        runs: list[SimulationResult] = []
-        scores: list[EscalationScore] = []
-        counts_by_id = {
-            example.seed.conversation_id: example.real_turn_count for example in examples
-        }
-
-        for index, example in enumerate(examples, start=1):
-            cid = example.seed.conversation_id
-            LOGGER.info("conversation %s/%s %s", index, len(examples), cid)
-            # Magnus sees the opening only. real_outcome stays on the example until stage 5.
-            personas = assign_personas(example.seed, persona_configs)
-            stage = "turn_budget"
-            try:
-                # Pair length sizes both arms; it never reaches the generator or updater.
-                turns = generated_turns_for(example, settings, counts_by_id)
-                LOGGER.info("%s will generate %s turns", cid, turns)
-                stage = "opening_replay"
-                personas = start_personas(
-                    example, personas, settings.model_id, mode, live, calls_path
-                )
-            except Exception as exc:  # noqa: BLE001 -- neither arm can start; record both as failed.
-                for condition in CONDITIONS:
-                    append_jsonl(
-                        events_path,
-                        {
-                            "stage": stage,
-                            "conversation_id": example.seed.conversation_id,
-                            "condition": condition,
-                            "status": "failed",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        },
-                    )
-                LOGGER.error("%s %s failed: %s", cid, stage, exc)
-                continue
-            append_jsonl(
-                events_path,
-                {
-                    "stage": "opening_replay",
-                    "conversation_id": example.seed.conversation_id,
-                    "status": "ok",
-                    "initial_trust": {sid: p.initial_trust for sid, p in personas.items()},
-                },
-            )
-            for condition in CONDITIONS:
-                LOGGER.info("%s running %s arm", cid, condition)
-                try:
-                    result = run_arm(
-                        example,
-                        personas,
-                        condition,
-                        settings,
-                        updater_version,
-                        experiment_id,
-                        mode,
-                        live,
-                        calls_path,
-                        turns,
-                    )
-                except Exception as exc:  # noqa: BLE001 -- one bad opening must not drop the rest.
-                    append_jsonl(
-                        events_path,
-                        {
-                            "stage": "simulation",
-                            "conversation_id": example.seed.conversation_id,
-                            "condition": condition,
-                            "status": "failed",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        },
-                    )
-                    LOGGER.error("%s %s simulation failed: %s", cid, condition, exc)
-                    continue
-                runs.append(result)
-                write_json(simulations_dir / f"{result.run_id}.json", to_dict(result))
-                append_jsonl(
-                    events_path,
-                    {
-                        "stage": "simulation",
-                        "run_id": result.run_id,
-                        "conversation_id": result.conversation_id,
-                        "condition": condition,
-                        "status": result.status,
-                        "error": result.run_metadata.error,
-                    },
-                )
-                if result.status != "ok":
-                    LOGGER.error("%s %s ended failed: %s", cid, condition, result.run_metadata.error)
-                    continue
-                # Shadi's judge. Passing the transcript, not the LabeledExample, keeps the label out.
-                score = score_arm(result, judge_config, judge, judge_dir, events_path)
-                if score is not None:
-                    scores.append(score)
-                    LOGGER.info("%s %s judged score=%.3f", cid, condition, score.score)
-                else:
-                    LOGGER.error("%s %s judge failed", cid, condition)
-
-        scores_path = run_dir / "scores.jsonl"
-        scores_path.write_text("", encoding="utf-8")
-        for score in scores:
-            append_jsonl(scores_path, to_dict(score))
-        # Labels enter here. on_incomplete keeps failed arms in the report instead of raising.
-        report = evaluate_conditions(
-            [to_dict(example) for example in examples],
-            [to_dict(run) for run in runs],
-            [to_dict(score) for score in scores],
-            on_incomplete="report",
-        )
-        summary = to_schema_summary(report)
-        write_json(run_dir / "evaluation_report.json", report)
-        write_json(run_dir / "evaluation.json", to_dict(summary))
-        LOGGER.info("wrote evaluation to %s", run_dir)
-        manifest["status"] = "completed"
-        manifest["n_examples"] = len(examples)
-        manifest["n_runs"] = len(runs)
-        manifest["n_scores"] = len(scores)
-        manifest["conversation_ids"] = [example.seed.conversation_id for example in examples]
-        manifest["coverage"] = report["coverage"]
-        write_json(manifest_path, manifest)
-    except Exception:
-        manifest["status"] = "failed"
-        write_json(manifest_path, manifest)
-        LOGGER.error("experiment failed")
-        raise
-    return run_dir
-
-
-def to_dict_settings(settings: SimulationSettings) -> dict[str, Any]:
-    """Plain settings for the manifest. This is not a schema dataclass."""
-    return {
-        "model_id": settings.model_id,
-        "prompt_version": settings.prompt_version,
-        "temperature": settings.temperature,
-        "max_generated_turns": settings.max_generated_turns,
-        "max_output_tokens": settings.max_output_tokens,
-        "random_seed": settings.random_seed,
-        "turn_budget": settings.turn_budget,
-        "min_generated_turns": settings.min_generated_turns,
-    }
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse the mock and live commands from SPEC section 8."""
-    parser = argparse.ArgumentParser(description="Run a paired static/dynamic persona experiment.")
-    parser.add_argument("--mode", required=True, choices=("mock", "live"))
-    parser.add_argument("--limit", type=int, default=None, help="maximum conversations to run")
-    parser.add_argument("--experiment-id", default=None)
-    parser.add_argument("--source", choices=("fixture", "processed"), default=None)
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    """Command-line options."""
+    parser = argparse.ArgumentParser(description="Run the static and dynamic trust experiments.")
+    parser.add_argument("--run-name", required=True, help="folder name under outputs/")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--mock", action="store_true", help="use the offline mock model")
+    source.add_argument("--provider", help="provider from configs/experiment.yaml, e.g. gemini")
+    parser.add_argument("--model", help="model id for every role (agents, critic, judge)")
+    parser.add_argument("--sample-size", type=int, help="conversations to use (even with pairs)")
+    parser.add_argument("--experiments", nargs="+", choices=EXPERIMENTS, help="default: both")
+    parser.add_argument("--workers", type=int, help="conversations simulated in parallel")
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help=argparse.SUPPRESS)
+    parser.add_argument("--verbose", action="store_true", help="also log every generated turn")
     args = parser.parse_args(argv)
-    if args.source is None:
-        args.source = "fixture" if args.mode == "mock" else "processed"
-    if args.experiment_id is None:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        args.experiment_id = f"{args.mode}-{stamp}"
-    if not args.experiment_id.replace("-", "").replace("_", "").isalnum():
-        raise ValueError("experiment-id may contain only letters, digits, hyphens, and underscores")
+    if not RUN_NAME.fullmatch(args.run_name):
+        parser.error("--run-name may use letters, digits, '.', '_' and '-' only")
     return args
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the experiment. Expected input errors print and return 1; artifacts stay on disk."""
-    configure_terminal_logging()
-    try:
-        args = parse_args(argv)
-        run_dir = run_experiment(
-            mode=args.mode,
-            limit=args.limit,
-            experiment_id=args.experiment_id,
-            source=args.source,
-            output_root=args.output_root,
-        )
-    except (ValueError, FileNotFoundError, FileExistsError, RuntimeError) as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    summary = json.loads((run_dir / "evaluation.json").read_text(encoding="utf-8"))
-    coverage = summary["coverage"]
-    print(run_dir)
-    print(
-        f"completed_pairs={coverage['n_completed_pairs']} excluded={coverage['n_excluded']}"
+def configure_logging(log_path: Path, verbose: bool) -> None:
+    """Log to the terminal and to the run's log file."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        handlers=[
+            logging.StreamHandler(sys.stderr),
+            logging.FileHandler(log_path, encoding="utf-8"),
+        ],
+        force=True,
     )
+    for noisy in ("httpx", "httpcore", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the pipeline; returns the process exit code."""
+    args = parse_args(argv)
+    run_dir = args.output_dir / args.run_name
+    configure_logging(run_dir / "run.log", args.verbose)
+    try:
+        data = load_data_settings(CONFIG_DIR / "data.yaml", ROOT)
+        if args.sample_size is not None:
+            check_sample_size(args.sample_size, data.keep_pairs)
+            data = replace(data, sample_size=args.sample_size)
+        cast = load_cast(CONFIG_DIR / "personas.yaml")
+        settings = with_overrides(
+            load_experiment_settings(CONFIG_DIR / "experiment.yaml", ROOT),
+            provider=MOCK_PROVIDER if args.mock else args.provider,
+            model=args.model,
+            experiments=args.experiments,
+            workers=args.workers,
+        )
+        examples = load_examples(data)
+        meter = UsageMeter()
+        roles, prompts = build_roles(build_clients(settings.llm, meter), settings)
+        run_pipeline(run_dir, examples, cast, settings, roles, prompts, meter)
+    except (ConfigError, FileNotFoundError, RunMismatchError, LLMSetupError) as exc:
+        LOGGER.error("%s", exc)
+        return 1
+    print((run_dir / SUMMARY).read_text(encoding="utf-8"))
+    print(f"Results: {run_dir}")
     return 0
 
 

@@ -1,33 +1,30 @@
-# Data settings read by scripts/prepare_data.py and src/data_loader.py.
-# Placeholder defaults: adjust later once the team agrees (record changes in DECISIONS.md).
+# Which prepared conversations a run uses.
+# Read by scripts/prepare_data.py (opening_turns) and by every experiment run (the rest).
 
-source: cga-wiki
-seeds_path: data/processed/seeds.jsonl
-labels_path: data/processed/labels.jsonl
+seeds_path: data/processed/seeds.jsonl    # openings the agents continue
+labels_path: data/processed/labels.jsonl  # real outcomes, read only when comparing results
 
-# Max real comments per seed opening, used by prepare_data.py.
-# Re-run prepare_data.py after changing; --opening-turns N overrides this for one run.
+# Real comments kept per opening. Openings always stop before the first personal attack.
+# Re-run scripts/prepare_data.py after changing this.
 opening_turns: 3
 
-# Drop seeds whose opening is shorter than this, used by data_loader.py.
-# Openings stop before the first attack, so short ones are mostly attack conversations.
+# Skip openings shorter than this. Because openings stop before the first attack, short
+# openings are mostly attack conversations, which would make length give the label away.
 min_opening_turns: 3
 
-# Keep only openings with this many distinct speakers (simulation assumes 2 agents)
-min_speakers: 2
-max_speakers: 2
-
-# Which source splits to draw from (train / val / test)
+# CGA source splits to draw from: train, val, test.
 splits: [test]
 
-# Only use conversations whose attack label was double-checked by an internal annotator
+# Only use conversations whose label the dataset authors double-checked.
 verified_only: false
 
-# Number of conversations to load; null = all that pass the filters
+# Conversations per run; null keeps every conversation that passes the filters.
+# Must be even when keep_pairs is true.
 sample_size: 20
 
-# Keep matched attack/civil pairs together and sample equal numbers of each label
+# Keep each attack conversation together with its matched civil conversation, so a run
+# always has as many real 1s as real 0s.
 keep_pairs: true
 
-# Fixed seed so the same sample is drawn every run
+# Same seed, same sample.
 random_seed: 544

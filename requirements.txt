@@ -1,6 +1,8 @@
+# pip install -r requirements.txt   (also installs this project, in editable mode)
 convokit==4.1.2
-pandas==3.0.6
+httpx2==2.14.0
+openai==3.35.1
 pytest==9.1.1
 pyyaml==6.0.3
-openai==3.35.1
-httpx2==2.14.0
+ruff==0.17.1
+-e .

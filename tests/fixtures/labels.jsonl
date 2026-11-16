@@ -1,0 +1,12 @@
+{"conversation_id": "t1-attack", "real_outcome": 1, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "t1-civil", "real_turn_count": 5, "verified": true}
+{"conversation_id": "t1-civil", "real_outcome": 0, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "t1-attack", "real_turn_count": 4, "verified": true}
+{"conversation_id": "t2-attack", "real_outcome": 1, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "t2-civil", "real_turn_count": 6, "verified": false}
+{"conversation_id": "t2-civil", "real_outcome": 0, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "t2-attack", "real_turn_count": 3, "verified": false}
+{"conversation_id": "t3-attack", "real_outcome": 1, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "t3-civil", "real_turn_count": 4, "verified": true}
+{"conversation_id": "t3-civil", "real_outcome": 0, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "t3-attack", "real_turn_count": 5, "verified": true}
+{"conversation_id": "one-speaker", "real_outcome": 1, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "one-speaker-partner", "real_turn_count": 4, "verified": true}
+{"conversation_id": "one-speaker-partner", "real_outcome": 0, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "one-speaker", "real_turn_count": 3, "verified": true}
+{"conversation_id": "short-opening", "real_outcome": 1, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "short-partner", "real_turn_count": 3, "verified": true}
+{"conversation_id": "short-partner", "real_outcome": 0, "label_definition": "conversation_has_personal_attack", "split": "test", "pair_id": "short-opening", "real_turn_count": 3, "verified": true}
+{"conversation_id": "train-attack", "real_outcome": 1, "label_definition": "conversation_has_personal_attack", "split": "train", "pair_id": "train-civil", "real_turn_count": 5, "verified": true}
+{"conversation_id": "train-civil", "real_outcome": 0, "label_definition": "conversation_has_personal_attack", "split": "train", "pair_id": "train-attack", "real_turn_count": 3, "verified": true}

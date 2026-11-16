@@ -6,21 +6,21 @@ alwaysApply: false
 
 # Testing
 
-- Use `pytest` with plain `assert`; one `tests/test_<module>.py` per `src/` module.
-- Tests must run offline and free: use the mock LLM client from `src/llm_client.py`, never a live API.
-- Load shared inputs from `tests/fixtures/*.json`; keep fixtures small and in the `schemas.py` format.
-- Changing a fixture changes the shared contract, so the integration owner must approve it.
-- Name tests by behavior: `test_static_trust_never_changes`, not `test_update_1`.
+- Use `pytest` with plain `assert`; one `tests/test_<module>.py` per module in `src/trustsim/`.
+- Tests must run offline and free: use `tests/helpers.py` (`ScriptedClient`, `FakeWriter`, `FakeCritic`) or `trustsim.llm.mock.MockLLMClient`, never a live API.
+- Shared data lives in `tests/fixtures/` in the same format as `data/processed/` (seeds.jsonl, labels.jsonl). Keep fixtures small.
+- Name tests by behavior: `test_static_never_calls_the_critic_and_trust_never_moves`, not `test_update_1`.
 - Cover the safeguards, not just the happy path:
-  - seeds contain no labels or turns after the cut-off
-  - judge payload contains no condition, trust, model id, or label
-  - static and dynamic runs from the same seed share all settings except the updater
-  - failed runs are kept with a status, not dropped
+  - seeds carry no labels, and openings stop before the first attack
+  - judge requests hold no experiment, trust, persona, or label
+  - static never calls the critic; both experiments share every setting except trust
+  - failed conversations are kept with a status and error, then retried
 
 ```python
 # ✅ GOOD
-def test_judge_payload_has_no_condition_or_trust(sample_result_dynamic):
-    payload = build_judge_payload(sample_result_dynamic)
-    assert "dynamic" not in payload
-    assert "trust" not in payload
+def test_judge_request_holds_no_experiment_trust_persona_or_label(cast, seed):
+    simulation = simulate(seed, DYNAMIC, cast, FakeWriter(), FakeCritic(), max_turns=4)
+    client = ScriptedClient({JUDGE: [verdict_answer()]})
+    Judge(client, "instructions", attempts=1).judge(simulation.transcript())
+    assert "dynamic" not in client.requests[0].user.lower()
 ```

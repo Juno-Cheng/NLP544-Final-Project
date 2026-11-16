@@ -9,7 +9,7 @@ alwaysApply: false
 ## Structure
 
 - Order: module docstring, imports (stdlib, third-party, local), constants, functions, `main()`.
-- Small functions that do one thing; implement the interfaces in `SPEC.md` §5 with the exact names and signatures.
+- Small functions that do one thing; pass model clients in rather than creating them inside a module.
 - Type hints on every public function signature.
 - Use `pathlib.Path` built from the repo root, not hardcoded or relative string paths.
 - Read/write data as UTF-8 JSONL with `ensure_ascii=False`.
@@ -19,7 +19,7 @@ alwaysApply: false
 ## Naming
 
 - `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants.
-- Use the spec's vocabulary: `conversation_id`, `run_id`, `speaker_id`, `condition`, `trust`.
+- Use the project's vocabulary: `conversation_id`, `speaker_id`, `persona_id`, `experiment` (static or dynamic), `trust`, `rating`, `verdict`.
 
 ## Comments and docstrings
 
